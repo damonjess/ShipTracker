@@ -42,7 +42,7 @@ object ShipRepository {
 
     private var webSocket: WebSocket? = null
 
-    fun startTracking(apiKey: String = "YOUR_AISSTREAM_KEY") {
+    fun startTracking(apiKey: String = "1a2b3c4d5e6f7g8h9i0j") {
         if (webSocket != null) return
         val request = Request.Builder().url("wss://stream.aisstream.io/v0/stream").build()
 
