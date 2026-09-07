@@ -26,10 +26,10 @@ object MarkerIconGenerator {
             DrawableCompat.setTint(vectorDrawable, colorInt)
 
             // Render a prominent ship inside a generous touch target.
-            // The colored halo makes vessels visible against both land and water.
+            // Larger sizes ensure vessels remain clearly visible at all zoom levels.
             val density = context.resources.displayMetrics.density
-            val iconSize = (112f * density).roundToInt()
-            val visibleSize = (64f * density).roundToInt()
+            val iconSize = (160f * density).roundToInt()
+            val visibleSize = (100f * density).roundToInt()
             val bitmap = Bitmap.createBitmap(
                 iconSize,
                 iconSize,
@@ -40,15 +40,15 @@ object MarkerIconGenerator {
             val haloPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 style = Paint.Style.FILL
                 color = colorInt
-                alpha = 190
+                alpha = 220
             }
-            canvas.drawCircle(center, center, visibleSize * 0.48f, haloPaint)
+            canvas.drawCircle(center, center, visibleSize * 0.5f, haloPaint)
             val outlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 style = Paint.Style.STROKE
-                strokeWidth = (3f * density)
+                strokeWidth = (5f * density)
                 color = Color.WHITE
             }
-            canvas.drawCircle(center, center, visibleSize * 0.48f, outlinePaint)
+            canvas.drawCircle(center, center, visibleSize * 0.5f, outlinePaint)
 
             val left = (iconSize - visibleSize) / 2
             val top = (iconSize - visibleSize) / 2

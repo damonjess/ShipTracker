@@ -177,6 +177,7 @@ fun OpenShipMap(
                 // visible vessel on a short tap within a generous touch radius.
                 var downX = 0f
                 var downY = 0f
+                val mapView = this
                 setOnTouchListener { _, event ->
                     when (event.actionMasked) {
                         MotionEvent.ACTION_DOWN -> {
@@ -185,11 +186,11 @@ fun OpenShipMap(
                         }
                         MotionEvent.ACTION_UP -> {
                             val movement = hypot(event.x - downX, event.y - downY)
-                            if (movement < 24f) {
+                            if (movement < 60f) {
                                 val tapPoint = Point(event.x.toInt(), event.y.toInt())
                                 val nearest = currentShips.value.minByOrNull { ship ->
                                     val shipPoint = Point()
-                                    projection.toPixels(
+                                    mapView.projection.toPixels(
                                         GeoPoint(ship.latitude, ship.longitude),
                                         shipPoint
                                     )
@@ -200,7 +201,7 @@ fun OpenShipMap(
                                 }
                                 if (nearest != null) {
                                     val nearestPoint = Point()
-                                    projection.toPixels(
+                                    mapView.projection.toPixels(
                                         GeoPoint(nearest.latitude, nearest.longitude),
                                         nearestPoint
                                     )
@@ -208,7 +209,7 @@ fun OpenShipMap(
                                         (nearestPoint.x - tapPoint.x).toFloat(),
                                         (nearestPoint.y - tapPoint.y).toFloat()
                                     )
-                                    val tapRadius = 42f * resources.displayMetrics.density
+                                    val tapRadius = 80f * resources.displayMetrics.density
                                     if (distance <= tapRadius) {
                                         currentOnShipClick.value(nearest)
                                     }
@@ -293,7 +294,7 @@ fun OpenShipMap(
                         icon = shipIcon
                         rotation = ship.heading
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                        isFlat = true
+                        isFlat = false
                         setOnMarkerClickListener { _, _ ->
                             onShipClick(ship)
                             true
