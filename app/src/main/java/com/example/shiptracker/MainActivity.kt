@@ -16,8 +16,19 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         // Configure osmdroid userAgent and configuration before loading UI
-        Configuration.getInstance().load(applicationContext, getSharedPreferences("osmdroid", MODE_PRIVATE))
-        Configuration.getInstance().userAgentValue = "DamonShipTracker/1.0"
+        val osmdroidConfig = Configuration.getInstance()
+        osmdroidConfig.load(applicationContext, getSharedPreferences("osmdroid", MODE_PRIVATE))
+        osmdroidConfig.userAgentValue = applicationContext.packageName
+
+        // Clear cached 403 tiles if any exist
+        try {
+            val tileCacheDir = osmdroidConfig.getOsmdroidTileCache(applicationContext)
+            if (tileCacheDir.exists()) {
+                tileCacheDir.deleteRecursively()
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
 
         enableEdgeToEdge()
 

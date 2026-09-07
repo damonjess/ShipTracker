@@ -67,12 +67,15 @@ import com.example.shiptracker.data.ShipState
 import com.example.shiptracker.util.MarkerIconGenerator
 import com.google.android.gms.maps.model.LatLng
 import org.osmdroid.config.Configuration
+import org.osmdroid.tileprovider.MapTileProviderBasic
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.tileprovider.tilesource.XYTileSource
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.FolderOverlay
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polyline
+import org.osmdroid.views.overlay.TilesOverlay
 
 // Mock data model for the UI
 data class Vessel(
@@ -148,18 +151,36 @@ fun OpenShipMap(
         modifier = modifier.fillMaxSize(),
         factory = { ctx ->
             val appCtx = ctx.applicationContext
-            Configuration.getInstance().load(appCtx, appCtx.getSharedPreferences("osmdroid", Context.MODE_PRIVATE))
-            Configuration.getInstance().userAgentValue = "DamonShipTracker/1.0"
+            val osmdroidConfig = Configuration.getInstance()
+            osmdroidConfig.load(appCtx, appCtx.getSharedPreferences("osmdroid", Context.MODE_PRIVATE))
+            osmdroidConfig.userAgentValue = appCtx.packageName
 
             MapView(ctx).apply {
+                // 1. Keep the standard OSM map as the base layer for land and water
                 setTileSource(TileSourceFactory.MAPNIK)
                 setMultiTouchControls(true)
                 controller.setZoom(8.0)
-                controller.setCenter(GeoPoint(50.5, -1.5)) // Centered on English Channel / North Sea
+                controller.setCenter(GeoPoint(50.5, -1.5))
 
-                // Attach our dedicated vessel and track overlays on top of the tiles
-                overlays.add(trackOverlay)
-                overlays.add(shipOverlay)
+                // 2. Define the OpenSeaMap transparent overlay source
+                val seamarkSource = XYTileSource(
+                    "OpenSeaMap",
+                    0, 19, 256, ".png",
+                    arrayOf("https://tiles.openseamap.org/seamark/")
+                )
+
+                // 3. Create the provider and the overlay
+                val seamarkProvider = MapTileProviderBasic(ctx, seamarkSource)
+                val seamarkOverlay = TilesOverlay(seamarkProvider, ctx).apply {
+                    // Critical: Make the loading background transparent so the base map shows through
+                    loadingBackgroundColor = android.graphics.Color.TRANSPARENT
+                }
+
+                // 4. Attach overlays in strict Z-index order (Bottom to Top)
+                overlays.add(seamarkOverlay) // Nautical data goes directly on the water
+                overlays.add(trackOverlay)   // Historical lines draw over the sea marks
+                overlays.add(shipOverlay)    // Ships float on the very top
+
                 mapViewRef = this
             }
         },
