@@ -13,7 +13,13 @@ data class ShipState(
     val name: String = "Unknown",
     val shipType: Int = 0, // AIS sends types as integer codes (e.g., 70 = Cargo)
     val length: Int = 0, // Calculated from dimensions
-    val heading: Float = 0f
+    val heading: Float = 0f,
+    // NEW FIELDS
+    val speed: Float = 0f,
+    val destination: String = "UNKNOWN",
+    val draught: Float = 0f,
+    val navStatus: Int = 15, // 15 means 'Undefined' in AIS protocol
+    val lastSeenMillis: Long = System.currentTimeMillis()
 ) : ClusterItem {
     // Required overrides for the Clustering engine
     override val position: LatLng
@@ -29,18 +35,25 @@ data class ShipState(
 // 2. The expanded JSON models to catch the Static Data & Position Report payloads
 @Serializable
 data class AisStreamMessage(
-    @SerialName("MessageType") val messageType: String,
-    @SerialName("MetaData") val metaData: AisMetaData,
+    @SerialName("MessageType") val messageType: String = "",
+    @SerialName("MetaData") val metaData: AisMetaData? = null,
     @SerialName("Message") val message: AisMessagePayload? = null
 )
 
 @Serializable
 data class AisMetaData(
-    @SerialName("MMSI") val mmsi: Long,
+    @SerialName("MMSI") val mmsi: Long = 0L,
     @SerialName("ShipName") val shipName: String = "",
-    val latitude: Double,
-    val longitude: Double
-)
+    @SerialName("latitude") val latitude: Double = 0.0,
+    @SerialName("longitude") val longitude: Double = 0.0,
+    @SerialName("Latitude") val latitudeAlt: Double? = null,
+    @SerialName("Longitude") val longitudeAlt: Double? = null
+) {
+    val effectiveLatitude: Double
+        get() = if (latitude != 0.0) latitude else (latitudeAlt ?: 0.0)
+    val effectiveLongitude: Double
+        get() = if (longitude != 0.0) longitude else (longitudeAlt ?: 0.0)
+}
 
 @Serializable
 data class AisMessagePayload(
@@ -51,18 +64,26 @@ data class AisMessagePayload(
 @Serializable
 data class PositionReport(
     @SerialName("Cog") val cog: Float = 0f,
-    @SerialName("TrueHeading") val trueHeading: Int = 511
+    @SerialName("Sog") val sog: Float = 0f, // Speed Over Ground
+    @SerialName("TrueHeading") val trueHeading: Int = 511,
+    @SerialName("NavigationalStatus") val navStatus: Int = 15,
+    @SerialName("Latitude") val latitude: Double? = null,
+    @SerialName("Longitude") val longitude: Double? = null
 )
 
 @Serializable
 data class ShipStaticData(
     @SerialName("Name") val name: String = "",
     @SerialName("Type") val type: Int = 0,
-    @SerialName("Dimension") val dimension: ShipDimension? = null
+    @SerialName("Dimension") val dimension: ShipDimension? = null,
+    @SerialName("Destination") val destination: String = "",
+    @SerialName("MaximumStaticDraught") val draught: Float = 0f
 )
 
 @Serializable
 data class ShipDimension(
-    @SerialName("A") val toBow: Int,
-    @SerialName("B") val toStern: Int
+    @SerialName("A") val toBow: Int = 0,
+    @SerialName("B") val toStern: Int = 0,
+    @SerialName("C") val toPort: Int = 0,
+    @SerialName("D") val toStarboard: Int = 0
 )

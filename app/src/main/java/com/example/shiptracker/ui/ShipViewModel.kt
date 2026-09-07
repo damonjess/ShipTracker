@@ -11,6 +11,8 @@ import com.example.shiptracker.data.ShipState
 import com.example.shiptracker.data.VesselDao
 import com.google.android.gms.maps.model.LatLng
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -21,11 +23,16 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 
 class ShipViewModel(
-    repository: ShipRepository = ShipRepository,
+    private val repository: ShipRepository = ShipRepository,
     private val vesselDao: VesselDao
 ) : ViewModel() {
+
+    init {
+        repository.startTracking()
+    }
 
     // 1. State for active UI filters
     private val _selectedFilters = MutableStateFlow<Set<ShipCategory>>(emptySet())
@@ -89,6 +96,18 @@ class ShipViewModel(
             } else {
                 current + category // Add if not active
             }
+        }
+    }
+
+    // Job to track the debounce timer
+    private var viewportJob: Job? = null
+
+    fun updateViewport(north: Double, south: Double, east: Double, west: Double) {
+        viewportJob?.cancel() // Cancel the previous timer if the user is still swiping
+
+        viewportJob = viewModelScope.launch {
+            delay(800) // Wait 800 milliseconds for the map to settle
+            repository.updateBoundingBox(north, south, east, west)
         }
     }
 

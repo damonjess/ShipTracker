@@ -49,6 +49,9 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
 
+    // Image loading
+    implementation("io.coil-kt:coil-compose:2.6.0")
+
     // Maps & Network dependencies
     implementation("org.osmdroid:osmdroid-android:6.1.18")
     implementation(libs.maps.compose)
@@ -62,6 +65,7 @@ dependencies {
     ksp(libs.androidx.room.compiler)
 
     testImplementation(libs.junit)
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)

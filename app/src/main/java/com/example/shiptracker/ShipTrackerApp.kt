@@ -15,6 +15,6 @@ class ShipTrackerApp : Application() {
         
         // Identify the app and provide a real contact URL to tile providers.
         // Do not use a placeholder address such as contact@example.com.
-        osmdroidConfig.userAgentValue = "ShipTracker/1.0 (+https://github.com/damonjess/ShipTracker)"
+        osmdroidConfig.userAgentValue = "ShipTrackerApp-v1.0 (damonjess-at-github)"
     }
 }

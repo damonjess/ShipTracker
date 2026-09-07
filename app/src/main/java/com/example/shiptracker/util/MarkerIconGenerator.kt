@@ -20,9 +20,9 @@ object MarkerIconGenerator {
 
             DrawableCompat.setTint(vectorDrawable, colorInt)
 
-            // 40dp is the sweet spot for Osmdroid markers
+            // Drop this from 48 down to 24 for a much sharper, professional map aesthetic
             val density = context.resources.displayMetrics.density
-            val sizePx = (40 * density).toInt() 
+            val sizePx = (24 * density).toInt() 
 
             val bmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
             val canvas = Canvas(bmp)
