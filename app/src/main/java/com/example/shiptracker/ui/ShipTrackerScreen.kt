@@ -149,7 +149,7 @@ fun OpenShipMap(
         factory = { ctx ->
             val appCtx = ctx.applicationContext
             Configuration.getInstance().load(appCtx, appCtx.getSharedPreferences("osmdroid", Context.MODE_PRIVATE))
-            Configuration.getInstance().userAgentValue = appCtx.packageName
+            Configuration.getInstance().userAgentValue = "DamonShipTracker/1.0"
 
             MapView(ctx).apply {
                 setTileSource(TileSourceFactory.MAPNIK)

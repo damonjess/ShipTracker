@@ -17,7 +17,7 @@ class MainActivity : ComponentActivity() {
 
         // Configure osmdroid userAgent and configuration before loading UI
         Configuration.getInstance().load(applicationContext, getSharedPreferences("osmdroid", MODE_PRIVATE))
-        Configuration.getInstance().userAgentValue = packageName
+        Configuration.getInstance().userAgentValue = "DamonShipTracker/1.0"
 
         enableEdgeToEdge()
 
