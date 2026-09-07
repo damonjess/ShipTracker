@@ -172,9 +172,7 @@ fun OpenShipMap(
                 setTileSource(baseSource)
                 setMultiTouchControls(true)
 
-                // When several vessels are close together, osmdroid marker hit
-                // testing can miss the small individual arrows. Select the nearest
-                // visible vessel on a short tap within a generous touch radius.
+                val density = resources.displayMetrics.density
                 var downX = 0f
                 var downY = 0f
                 val mapView = this
@@ -186,7 +184,8 @@ fun OpenShipMap(
                         }
                         MotionEvent.ACTION_UP -> {
                             val movement = hypot(event.x - downX, event.y - downY)
-                            if (movement < 60f) {
+                            val maxTapDrift = 100f * density
+                            if (movement < maxTapDrift) {
                                 val tapPoint = Point(event.x.toInt(), event.y.toInt())
                                 val nearest = currentShips.value.minByOrNull { ship ->
                                     val shipPoint = Point()
@@ -209,7 +208,7 @@ fun OpenShipMap(
                                         (nearestPoint.x - tapPoint.x).toFloat(),
                                         (nearestPoint.y - tapPoint.y).toFloat()
                                     )
-                                    val tapRadius = 80f * resources.displayMetrics.density
+                                    val tapRadius = 140f * density
                                     if (distance <= tapRadius) {
                                         currentOnShipClick.value(nearest)
                                     }
@@ -217,7 +216,6 @@ fun OpenShipMap(
                             }
                         }
                     }
-                    // Returning false leaves pan and zoom handling to osmdroid.
                     false
                 }
                 controller.setZoom(8.0)
@@ -268,19 +266,17 @@ fun OpenShipMap(
                 }
             }
 
-            // Update existing markers or instantiate new ones
             ships.forEach { ship ->
                 var marker = markersMap[ship.mmsi]
                 val colorInt = MarkerIconGenerator.getShipAndroidColor(ship.shipType)
                 val shipIcon = MarkerIconGenerator.getTintedShipIcon(mapView.context, colorInt)
 
                 if (marker != null) {
-                    // Keep the callback current as Compose recomposes.
-                    marker.setOnMarkerClickListener { _, _ ->
-                        onShipClick(ship)
+                    marker.setOnMarkerClickListener { clickedMarker, _ ->
+                        currentOnShipClick.value(ship)
+                        clickedMarker.showInfoWindow()
                         true
                     }
-                    // Smoothly shift position and rotation without recreating the object
                     marker.position = GeoPoint(ship.latitude, ship.longitude)
                     marker.icon = shipIcon
                     marker.rotation = ship.heading
@@ -295,8 +291,9 @@ fun OpenShipMap(
                         rotation = ship.heading
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                         isFlat = false
-                        setOnMarkerClickListener { _, _ ->
-                            onShipClick(ship)
+                        setOnMarkerClickListener { clickedMarker, _ ->
+                            currentOnShipClick.value(ship)
+                            clickedMarker.showInfoWindow()
                             true
                         }
                     }

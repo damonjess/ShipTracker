@@ -13,51 +13,48 @@ import com.example.shiptracker.R
 import kotlin.math.roundToInt
 
 object MarkerIconGenerator {
-    // Cache map to prevent recreating bitmaps 10,000 times a second
     private val iconCache = mutableMapOf<Int, Drawable>()
+    const val MARKER_SIZE_DP = 200f
 
     fun getTintedShipIcon(context: Context, colorInt: Int): Drawable {
         return iconCache.getOrPut(colorInt) {
-            // Load custom ship vector shape (points UP/North by default)
+            val density = context.resources.displayMetrics.density
+            val sizePx = (MARKER_SIZE_DP * density).roundToInt()
             val vectorDrawable = ContextCompat.getDrawable(context, R.drawable.ic_ship_arrow)?.mutate()
                 ?: return@getOrPut ContextCompat.getDrawable(context, android.R.drawable.ic_dialog_map)!!
-
-            // Apply dynamic tint color based on ship type
             DrawableCompat.setTint(vectorDrawable, colorInt)
 
-            // Render a prominent ship inside a generous touch target.
-            // Larger sizes ensure vessels remain clearly visible at all zoom levels.
-            val density = context.resources.displayMetrics.density
-            val iconSize = (160f * density).roundToInt()
-            val visibleSize = (100f * density).roundToInt()
-            val bitmap = Bitmap.createBitmap(
-                iconSize,
-                iconSize,
-                Bitmap.Config.ARGB_8888
-            )
+            val bitmap = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
             val canvas = Canvas(bitmap)
-            val center = iconSize / 2f
+            val center = sizePx / 2f
+            val haloRadius = sizePx * 0.44f
+
             val haloPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 style = Paint.Style.FILL
                 color = colorInt
-                alpha = 220
+                alpha = 245
             }
-            canvas.drawCircle(center, center, visibleSize * 0.5f, haloPaint)
+            canvas.drawCircle(center, center, haloRadius, haloPaint)
+
             val outlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 style = Paint.Style.STROKE
-                strokeWidth = (5f * density)
+                strokeWidth = 8f * density
                 color = Color.WHITE
             }
-            canvas.drawCircle(center, center, visibleSize * 0.5f, outlinePaint)
+            canvas.drawCircle(center, center, haloRadius, outlinePaint)
 
-            val left = (iconSize - visibleSize) / 2
-            val top = (iconSize - visibleSize) / 2
-            vectorDrawable.setBounds(
-                left,
-                top,
-                left + visibleSize,
-                top + visibleSize
-            )
+            val dropShadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.STROKE
+                strokeWidth = 2f * density
+                color = Color.BLACK
+                alpha = 90
+            }
+            canvas.drawCircle(center, center, haloRadius + 1.5f * density, dropShadowPaint)
+
+            val shipSize = (sizePx * 0.8f).roundToInt()
+            val left = (sizePx - shipSize) / 2
+            val top = (sizePx - shipSize) / 2
+            vectorDrawable.setBounds(left, top, left + shipSize, top + shipSize)
             vectorDrawable.draw(canvas)
 
             BitmapDrawable(context.resources, bitmap)
