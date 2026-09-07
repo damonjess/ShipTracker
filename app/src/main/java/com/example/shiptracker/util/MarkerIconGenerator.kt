@@ -2,44 +2,38 @@ package com.example.shiptracker.util
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Canvas
-import android.graphics.Paint
 import android.graphics.Color
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.DrawableCompat
 import com.example.shiptracker.R
-import kotlin.math.roundToInt
 
 object MarkerIconGenerator {
-    const val MARKER_SIZE_DP = 48f
-    private val iconCache = mutableMapOf<Int, Drawable>()
+    private val bitmapCache = mutableMapOf<Int, Bitmap>()
 
     fun getTintedShipIcon(context: Context, colorInt: Int): Drawable {
-        return iconCache.getOrPut(colorInt) {
+        val bitmap = bitmapCache.getOrPut(colorInt) {
             val vectorDrawable = ContextCompat.getDrawable(context, R.drawable.ic_ship_arrow)?.mutate()
-                ?: return@getOrPut ContextCompat.getDrawable(context, android.R.drawable.ic_dialog_map)!!
+                ?: ContextCompat.getDrawable(context, android.R.drawable.ic_dialog_map)!!
 
             DrawableCompat.setTint(vectorDrawable, colorInt)
 
-            // Force a standard 48dp touch target size
+            // 40dp is the sweet spot for Osmdroid markers
             val density = context.resources.displayMetrics.density
-            val sizePx = (48 * density).toInt() 
+            val sizePx = (40 * density).toInt() 
 
-            val bitmap = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
-            val canvas = Canvas(bitmap)
+            val bmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(bmp)
             
-            // Draw the vector exactly to our bounding box
             vectorDrawable.setBounds(0, 0, sizePx, sizePx)
             vectorDrawable.draw(canvas)
-
-            BitmapDrawable(context.resources, bitmap).apply {
-                // CRITICAL: Tell osmdroid exactly how big this is so it doesn't double-scale
-                setBounds(0, 0, sizePx, sizePx)
-            }
+            bmp
         }
+
+        // Return a fresh wrapper so Osmdroid safely manages the bounds internally
+        return BitmapDrawable(context.resources, bitmap)
     }
 
     fun getShipAndroidColor(aisTypeCode: Int): Int {

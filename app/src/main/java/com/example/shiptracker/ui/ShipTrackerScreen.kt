@@ -50,6 +50,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -76,6 +77,7 @@ import com.example.shiptracker.data.ShipState
 import com.example.shiptracker.util.MarkerIconGenerator
 import com.google.android.gms.maps.model.LatLng
 import org.osmdroid.tileprovider.MapTileProviderBasic
+import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.tileprovider.tilesource.XYTileSource
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
@@ -129,129 +131,107 @@ fun OpenShipMap(
     trackPoints: List<LatLng> = emptyList(),
     onShipClick: (ShipState) -> Unit
 ) {
+    val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-
-    val shipOverlay = remember { FolderOverlay() }
-    val trackOverlay = remember { FolderOverlay() }
-    val markersMap = remember { mutableMapOf<Long, Marker>() }
     val currentOnShipClick = rememberUpdatedState(onShipClick)
 
-    var mapViewRef by remember { mutableStateOf<MapView?>(null) }
+    // 1. Initialize the map exactly ONCE
+    val mapView = remember {
+        MapView(context).apply {
+            // Return to the official, free OpenStreetMap servers
+            setTileSource(TileSourceFactory.MAPNIK)
+            setMultiTouchControls(true)
+            controller.setZoom(8.0)
+            controller.setCenter(GeoPoint(50.5, -1.5))
+        }
+    }
+
+    // 2. Remember our overlays and state so they survive recompositions
+    val shipOverlay = remember { FolderOverlay().also { mapView.overlays.add(it) } }
+    val trackOverlay = remember { FolderOverlay().also { mapView.overlays.add(it) } }
+    val markersMap = remember { mutableMapOf<Long, Marker>() }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_RESUME -> mapViewRef?.onResume()
-                Lifecycle.Event.ON_PAUSE -> mapViewRef?.onPause()
-                Lifecycle.Event.ON_DESTROY -> mapViewRef?.onDetach()
+                Lifecycle.Event.ON_RESUME -> mapView.onResume()
+                Lifecycle.Event.ON_PAUSE -> mapView.onPause()
+                Lifecycle.Event.ON_DESTROY -> mapView.onDetach()
                 else -> Unit
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
-            mapViewRef?.onDetach()
+            mapView.onDetach()
         }
     }
 
+    // 3. The view simply displays the map, it does NO processing
     AndroidView(
         modifier = modifier.fillMaxSize(),
-        factory = { ctx ->
-            MapView(ctx).apply {
-                val baseSource = XYTileSource(
-                    "OpenStreetMapDE",
-                    0,
-                    19,
-                    256,
-                    ".png",
-                    arrayOf("https://tile.openstreetmap.de/")
-                )
-                setTileSource(baseSource)
-                setMultiTouchControls(true)
-                controller.setZoom(8.0)
-                controller.setCenter(GeoPoint(50.5, -1.5))
-
-                val seamarkSource = XYTileSource(
-                    "OpenSeaMap",
-                    0, 19, 256, ".png",
-                    arrayOf("https://tiles.openseamap.org/seamark/")
-                )
-                val seamarkProvider = MapTileProviderBasic(ctx, seamarkSource)
-                val seamarkOverlay = TilesOverlay(seamarkProvider, ctx).apply {
-                    loadingBackgroundColor = android.graphics.Color.TRANSPARENT
-                }
-
-                overlays.add(seamarkOverlay)
-                overlays.add(trackOverlay)
-                overlays.add(shipOverlay)
-
-                mapViewRef = this
-            }
-        },
-        update = { mapView ->
-            trackOverlay.items.clear()
-            if (trackPoints.size > 1) {
-                val polyline = Polyline(mapView).apply {
-                    outlinePaint.color = android.graphics.Color.parseColor("#00E5FF")
-                    outlinePaint.strokeWidth = 8f
-                    setPoints(trackPoints.map { GeoPoint(it.latitude, it.longitude) })
-                }
-                trackOverlay.add(polyline)
-            }
-
-            val activeMmsis = ships.map { it.mmsi }.toSet()
-            val removedMmsis = markersMap.keys - activeMmsis
-            removedMmsis.forEach { mmsi ->
-                markersMap.remove(mmsi)?.let { shipOverlay.remove(it) }
-            }
-
-            // Update existing markers or instantiate new ones
-            ships.forEach { ship ->
-                val existingMarker = markersMap[ship.mmsi]
-                val colorInt = MarkerIconGenerator.getShipAndroidColor(ship.shipType)
-                val shipIcon = MarkerIconGenerator.getTintedShipIcon(mapView.context, colorInt)
-
-                if (existingMarker != null) {
-                    existingMarker.position = GeoPoint(ship.latitude, ship.longitude)
-                    existingMarker.icon = shipIcon
-                    existingMarker.rotation = ship.heading
-                    existingMarker.title = ship.name.ifEmpty { "MMSI: ${ship.mmsi}" }
-                    existingMarker.snippet = getShipTypeString(ship.shipType)
-                    
-                    // 🚨 CRITICAL FIX: Refresh the click listener!
-                    // Without this, tapping a moving ship triggers a stale Compose state.
-                    existingMarker.setOnMarkerClickListener { clickedMarker, _ ->
-                        currentOnShipClick.value(ship)
-                        clickedMarker.showInfoWindow()
-                        true 
-                    }
-                } else {
-                    val newMarker = Marker(mapView).apply {
-                        position = GeoPoint(ship.latitude, ship.longitude)
-                        title = ship.name.ifEmpty { "MMSI: ${ship.mmsi}" }
-                        snippet = getShipTypeString(ship.shipType)
-                        icon = shipIcon
-                        rotation = ship.heading
-
-                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                        
-                        // REMOVED: isFlat = true (this breaks the touch hitbox when rotated)
-
-                        setOnMarkerClickListener { clickedMarker, _ ->
-                            currentOnShipClick.value(ship)
-                            clickedMarker.showInfoWindow()
-                            true
-                        }
-                    }
-
-                    markersMap[ship.mmsi] = newMarker
-                    shipOverlay.add(newMarker)
-                }
-            }
-
-            mapView.invalidate()
-        }
+        factory = { mapView }
     )
+
+    // 4. Background Data Processor: Handles the high-speed WebSocket stream smoothly
+    LaunchedEffect(ships, trackPoints) {
+        // Draw the historical track
+        trackOverlay.items.clear()
+        if (trackPoints.size > 1) {
+            val polyline = Polyline(mapView).apply {
+                outlinePaint.color = android.graphics.Color.parseColor("#00E5FF")
+                outlinePaint.strokeWidth = 8f
+                setPoints(trackPoints.map { GeoPoint(it.latitude, it.longitude) })
+            }
+            trackOverlay.add(polyline)
+        }
+
+        // Manage active ships
+        val activeMmsis = ships.map { it.mmsi }.toSet()
+        val removedMmsis = markersMap.keys - activeMmsis
+        removedMmsis.forEach { mmsi ->
+            markersMap.remove(mmsi)?.let { shipOverlay.remove(it) }
+        }
+
+        // Add or update ships
+        ships.forEach { ship ->
+            val existingMarker = markersMap[ship.mmsi]
+
+            if (existingMarker != null) {
+                // Extremely fast update for moving ships
+                existingMarker.position = GeoPoint(ship.latitude, ship.longitude)
+                existingMarker.rotation = ship.heading
+                existingMarker.relatedObject = ship // Keep data fresh for the click listener
+            } else {
+                // Slow path: Only done once when a new ship arrives
+                val colorInt = MarkerIconGenerator.getShipAndroidColor(ship.shipType)
+                val shipIcon = MarkerIconGenerator.getTintedShipIcon(context, colorInt)
+
+                val newMarker = Marker(mapView).apply {
+                    position = GeoPoint(ship.latitude, ship.longitude)
+                    icon = shipIcon
+                    rotation = ship.heading
+                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                    isFlat = true // Ship rotates smoothly on the water
+                    relatedObject = ship
+
+                    setOnMarkerClickListener { clickedMarker, _ ->
+                        val clickedShip = clickedMarker.relatedObject as? ShipState
+                        if (clickedShip != null) {
+                            currentOnShipClick.value(clickedShip)
+                        }
+                        true // Consume tap
+                    }
+                }
+
+                markersMap[ship.mmsi] = newMarker
+                shipOverlay.add(newMarker)
+            }
+        }
+
+        // Asynchronously tell Osmdroid to redraw the screen
+        mapView.postInvalidate()
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
