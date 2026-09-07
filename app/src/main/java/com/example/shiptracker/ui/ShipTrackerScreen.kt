@@ -1,6 +1,8 @@
 package com.example.shiptracker.ui
 
 import android.content.Context
+import android.graphics.Point
+import android.view.MotionEvent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -59,6 +61,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import kotlin.math.hypot
+import java.util.Locale
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -82,7 +86,8 @@ data class Vessel(
     val type: String,
     val lat: Double,
     val lng: Double,
-    val length: String = ""
+    val length: String = "",
+    val heading: Float = 0f
 )
 
 fun getShipTypeString(aisTypeCode: Int): String {
@@ -124,6 +129,10 @@ fun OpenShipMap(
     val shipOverlay = remember { FolderOverlay() }
     val trackOverlay = remember { FolderOverlay() }
     val markersMap = remember { mutableMapOf<Long, Marker>() }
+    val currentShips = remember { mutableStateOf<List<ShipState>>(emptyList()) }
+    val currentOnShipClick = remember { mutableStateOf(onShipClick) }
+    currentShips.value = ships
+    currentOnShipClick.value = onShipClick
 
     // 2. Manage MapView lifecycle to prevent memory leaks when navigating away
     var mapViewRef by remember { mutableStateOf<MapView?>(null) }
@@ -149,17 +158,67 @@ fun OpenShipMap(
         modifier = modifier.fillMaxSize(),
         factory = { ctx ->
             MapView(ctx).apply {
-                // Configure German OpenStreetMap tile server as base layer
+                // Use the verified OSM-derived German tile service rather than
+                // tile.openstreetmap.org, which is blocking this app's traffic.
+                // This endpoint is keyless and follows osmdroid's z/x/y path format.
                 val baseSource = XYTileSource(
-                    "OSMde",
+                    "OpenStreetMapDE",
                     0,
-                    20,
+                    19,
                     256,
                     ".png",
                     arrayOf("https://tile.openstreetmap.de/")
                 )
                 setTileSource(baseSource)
                 setMultiTouchControls(true)
+
+                // When several vessels are close together, osmdroid marker hit
+                // testing can miss the small individual arrows. Select the nearest
+                // visible vessel on a short tap within a generous touch radius.
+                var downX = 0f
+                var downY = 0f
+                setOnTouchListener { _, event ->
+                    when (event.actionMasked) {
+                        MotionEvent.ACTION_DOWN -> {
+                            downX = event.x
+                            downY = event.y
+                        }
+                        MotionEvent.ACTION_UP -> {
+                            val movement = hypot(event.x - downX, event.y - downY)
+                            if (movement < 24f) {
+                                val tapPoint = Point(event.x.toInt(), event.y.toInt())
+                                val nearest = currentShips.value.minByOrNull { ship ->
+                                    val shipPoint = Point()
+                                    projection.toPixels(
+                                        GeoPoint(ship.latitude, ship.longitude),
+                                        shipPoint
+                                    )
+                                    hypot(
+                                        (shipPoint.x - tapPoint.x).toFloat(),
+                                        (shipPoint.y - tapPoint.y).toFloat()
+                                    )
+                                }
+                                if (nearest != null) {
+                                    val nearestPoint = Point()
+                                    projection.toPixels(
+                                        GeoPoint(nearest.latitude, nearest.longitude),
+                                        nearestPoint
+                                    )
+                                    val distance = hypot(
+                                        (nearestPoint.x - tapPoint.x).toFloat(),
+                                        (nearestPoint.y - tapPoint.y).toFloat()
+                                    )
+                                    val tapRadius = 42f * resources.displayMetrics.density
+                                    if (distance <= tapRadius) {
+                                        currentOnShipClick.value(nearest)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // Returning false leaves pan and zoom handling to osmdroid.
+                    false
+                }
                 controller.setZoom(8.0)
                 controller.setCenter(GeoPoint(50.5, -1.5))
 
@@ -214,26 +273,34 @@ fun OpenShipMap(
                 val colorInt = MarkerIconGenerator.getShipAndroidColor(ship.shipType)
                 val shipIcon = MarkerIconGenerator.getTintedShipIcon(mapView.context, colorInt)
 
-                if (marker == null) {
+                if (marker != null) {
+                    // Keep the callback current as Compose recomposes.
+                    marker.setOnMarkerClickListener { _, _ ->
+                        onShipClick(ship)
+                        true
+                    }
+                    // Smoothly shift position and rotation without recreating the object
+                    marker.position = GeoPoint(ship.latitude, ship.longitude)
+                    marker.icon = shipIcon
+                    marker.rotation = ship.heading
+                    marker.title = ship.name.ifEmpty { "MMSI: ${ship.mmsi}" }
+                    marker.snippet = getShipTypeString(ship.shipType)
+                } else {
                     marker = Marker(mapView).apply {
+                        position = GeoPoint(ship.latitude, ship.longitude)
+                        title = ship.name.ifEmpty { "MMSI: ${ship.mmsi}" }
+                        snippet = getShipTypeString(ship.shipType)
+                        icon = shipIcon
+                        rotation = ship.heading
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                         isFlat = true
+                        setOnMarkerClickListener { _, _ ->
+                            onShipClick(ship)
+                            true
+                        }
                     }
                     markersMap[ship.mmsi] = marker
                     shipOverlay.add(marker)
-                }
-
-                // Always update properties and re-bind the click listener to the latest ship data
-                marker.apply {
-                    position = GeoPoint(ship.latitude, ship.longitude)
-                    icon = shipIcon
-                    rotation = ship.heading
-                    title = ship.name.ifEmpty { "MMSI: ${ship.mmsi}" }
-                    snippet = getShipTypeString(ship.shipType)
-                    setOnMarkerClickListener { _, _ ->
-                        onShipClick(ship)
-                        true // Intercept event to trigger your Compose bottom sheet
-                    }
                 }
             }
 
@@ -286,7 +353,8 @@ fun ShipTrackerMainScreen(
                         type = getShipTypeString(ship.shipType),
                         lat = ship.latitude,
                         lng = ship.longitude,
-                        length = if (ship.length > 0) "${ship.length}m" else ""
+                        length = if (ship.length > 0) "${ship.length}m" else "Unknown",
+                        heading = ship.heading
                     )
                     viewModel.selectVessel(ship.mmsi)
                 }
@@ -430,20 +498,35 @@ fun VesselDetailsPanel(vessel: Vessel) {
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold
                 )
-                val detailsText = if (vessel.length.isNotEmpty()) {
-                    "${vessel.type} • ${vessel.length} • Last seen a minute ago"
-                } else {
-                    "${vessel.type} • Last seen a minute ago"
-                }
                 Text(
-                    text = detailsText,
+                    text = vessel.type,
                     style = MaterialTheme.typography.bodyMedium,
                     color = Color.Gray
                 )
             }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(20.dp))
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            VesselInfoRow("MMSI", vessel.mmsi.toString())
+            VesselInfoRow(
+                "Position",
+                String.format(Locale.US, "%.5f, %.5f", vessel.lat, vessel.lng)
+            )
+            VesselInfoRow("Length", vessel.length)
+            VesselInfoRow("Heading", "${vessel.heading.toInt()}°")
+            VesselInfoRow("Status", "Live AIS position")
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
 
         // Action Buttons
         Row(
@@ -460,6 +543,22 @@ fun VesselDetailsPanel(vessel: Vessel) {
                 Icon(Icons.Default.History, contentDescription = "History", tint = MaterialTheme.colorScheme.primary)
             }
         }
+    }
+}
+
+@Composable
+private fun VesselInfoRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, style = MaterialTheme.typography.labelLarge)
+        Text(
+            value,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold
+        )
     }
 }
 

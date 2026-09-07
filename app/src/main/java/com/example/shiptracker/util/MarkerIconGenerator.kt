@@ -3,12 +3,14 @@ package com.example.shiptracker.util
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Paint
 import android.graphics.Color
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.DrawableCompat
 import com.example.shiptracker.R
+import kotlin.math.roundToInt
 
 object MarkerIconGenerator {
     // Cache map to prevent recreating bitmaps 10,000 times a second
@@ -23,14 +25,39 @@ object MarkerIconGenerator {
             // Apply dynamic tint color based on ship type
             DrawableCompat.setTint(vectorDrawable, colorInt)
 
-            // Convert to Bitmap for maximum Osmdroid rendering performance
+            // Render a prominent ship inside a generous touch target.
+            // The colored halo makes vessels visible against both land and water.
+            val density = context.resources.displayMetrics.density
+            val iconSize = (112f * density).roundToInt()
+            val visibleSize = (64f * density).roundToInt()
             val bitmap = Bitmap.createBitmap(
-                vectorDrawable.intrinsicWidth,
-                vectorDrawable.intrinsicHeight,
+                iconSize,
+                iconSize,
                 Bitmap.Config.ARGB_8888
             )
             val canvas = Canvas(bitmap)
-            vectorDrawable.setBounds(0, 0, canvas.width, canvas.height)
+            val center = iconSize / 2f
+            val haloPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.FILL
+                color = colorInt
+                alpha = 190
+            }
+            canvas.drawCircle(center, center, visibleSize * 0.48f, haloPaint)
+            val outlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.STROKE
+                strokeWidth = (3f * density)
+                color = Color.WHITE
+            }
+            canvas.drawCircle(center, center, visibleSize * 0.48f, outlinePaint)
+
+            val left = (iconSize - visibleSize) / 2
+            val top = (iconSize - visibleSize) / 2
+            vectorDrawable.setBounds(
+                left,
+                top,
+                left + visibleSize,
+                top + visibleSize
+            )
             vectorDrawable.draw(canvas)
 
             BitmapDrawable(context.resources, bitmap)
