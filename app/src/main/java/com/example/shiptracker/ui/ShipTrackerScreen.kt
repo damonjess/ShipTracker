@@ -66,9 +66,7 @@ import com.example.shiptracker.data.ShipCategory
 import com.example.shiptracker.data.ShipState
 import com.example.shiptracker.util.MarkerIconGenerator
 import com.google.android.gms.maps.model.LatLng
-import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.MapTileProviderBasic
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.tileprovider.tilesource.XYTileSource
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
@@ -150,14 +148,16 @@ fun OpenShipMap(
     AndroidView(
         modifier = modifier.fillMaxSize(),
         factory = { ctx ->
-            val appCtx = ctx.applicationContext
-            val osmdroidConfig = Configuration.getInstance()
-            osmdroidConfig.load(appCtx, appCtx.getSharedPreferences("osmdroid", Context.MODE_PRIVATE))
-            osmdroidConfig.userAgentValue = appCtx.packageName
-
             MapView(ctx).apply {
-                // 1. Keep the standard OSM map as the base layer for land and water
-                setTileSource(TileSourceFactory.MAPNIK)
+                // 1. Use Wikimedia Maps as the base layer (free, fast, reliable, no API key required, and no 403 blocks)
+                val wikimediaSource = XYTileSource(
+                    "Wikimedia",
+                    0, 19, 256, ".png",
+                    arrayOf(
+                        "https://maps.wikimedia.org/osm-intl/"
+                    )
+                )
+                setTileSource(wikimediaSource)
                 setMultiTouchControls(true)
                 controller.setZoom(8.0)
                 controller.setCenter(GeoPoint(50.5, -1.5))
