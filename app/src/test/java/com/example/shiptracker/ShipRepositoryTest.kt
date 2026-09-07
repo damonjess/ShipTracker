@@ -1,5 +1,6 @@
 package com.example.shiptracker
 
+import com.example.shiptracker.data.AisStreamMessage
 import com.example.shiptracker.data.ShipRepository
 import com.example.shiptracker.data.ShipState
 import kotlinx.coroutines.Dispatchers
@@ -51,5 +52,47 @@ class ShipRepositoryTest {
         assertEquals("PRIDE OF HULL", retrieved?.name)
         assertEquals(60, retrieved?.shipType)
         assertEquals(215, retrieved?.length)
+    }
+
+    @Test
+    fun testStartTrackingAcceptsRealApiKey() {
+        ShipRepository.stopTracking()
+
+        val started = ShipRepository.startTracking("aisstream-live-key-123456")
+
+        assertTrue(
+            "A real AIS API key should start tracking",
+            started
+        )
+    }
+
+    @Test
+    fun testAisStreamMetadataParsesActualPayloadCoordinates() {
+        val payload = """
+            {
+              "MessageType": "PositionReport",
+              "MetaData": {
+                "MMSI": 123456789,
+                "ShipName": "EVER GIVEN",
+                "Latitude": 30.002,
+                "Longitude": 32.583
+              },
+              "Message": {
+                "PositionReport": {
+                  "Sog": 9.4,
+                  "Cog": 318.2
+                }
+              }
+            }
+        """.trimIndent()
+
+        val message = kotlinx.serialization.json.Json {
+            ignoreUnknownKeys = true
+            isLenient = true
+            coerceInputValues = true
+        }.decodeFromString<AisStreamMessage>(payload)
+
+        assertEquals(30.002, message.metaData?.effectiveLatitude ?: 0.0, 0.0001)
+        assertEquals(32.583, message.metaData?.effectiveLongitude ?: 0.0, 0.0001)
     }
 }

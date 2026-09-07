@@ -44,10 +44,10 @@ data class AisStreamMessage(
 data class AisMetaData(
     @SerialName("MMSI") val mmsi: Long = 0L,
     @SerialName("ShipName") val shipName: String = "",
-    @SerialName("latitude") val latitude: Double = 0.0,
-    @SerialName("longitude") val longitude: Double = 0.0,
-    @SerialName("Latitude") val latitudeAlt: Double? = null,
-    @SerialName("Longitude") val longitudeAlt: Double? = null
+    @SerialName("Latitude") val latitude: Double = 0.0,
+    @SerialName("Longitude") val longitude: Double = 0.0,
+    @SerialName("latitude") val latitudeAlt: Double? = null,
+    @SerialName("longitude") val longitudeAlt: Double? = null
 ) {
     val effectiveLatitude: Double
         get() = if (latitude != 0.0) latitude else (latitudeAlt ?: 0.0)

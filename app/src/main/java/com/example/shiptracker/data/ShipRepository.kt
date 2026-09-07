@@ -1,6 +1,7 @@
 package com.example.shiptracker.data
 
 import android.util.Log
+import com.example.shiptracker.BuildConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -33,6 +34,41 @@ object ShipRepository {
     private var vesselDao: VesselDao? = null
     private val scope = CoroutineScope(Dispatchers.IO)
     private var webSocket: WebSocket? = null
+
+    private val placeholderApiKeys = setOf(
+        "YOUR_REAL_AISSTREAM_API_KEY",
+        "replace_with_real_key",
+        "demo",
+        "test",
+        "mock",
+        "changeme"
+    )
+
+    private fun isPlaceholderApiKey(value: String): Boolean {
+        val normalized = value.trim()
+        if (normalized.isEmpty()) return true
+        return normalized.lowercase() in placeholderApiKeys || normalized.contains("example", ignoreCase = true)
+    }
+
+    private fun resolveApiKey(explicitApiKey: String?): String? {
+        val fromArgument = explicitApiKey?.trim()
+        if (fromArgument != null) {
+            if (isPlaceholderApiKey(fromArgument)) return null
+            if (fromArgument.isNotEmpty()) return fromArgument
+        }
+
+        val fromBuildConfig = BuildConfig.AIS_STREAM_API_KEY.trim()
+        if (fromBuildConfig.isNotEmpty() && !isPlaceholderApiKey(fromBuildConfig)) return fromBuildConfig
+
+        return null
+    }
+
+    private fun resolveMmsi(metaData: AisMetaData): Long {
+        if (metaData.mmsi != 0L) return metaData.mmsi
+
+        val seed = (metaData.shipName.ifBlank { "unknown" } + metaData.effectiveLatitude + metaData.effectiveLongitude).hashCode()
+        return (seed.toLong() and Long.MAX_VALUE) % 9_000_000_000L + 1_000_000_000L
+    }
 
     // Garbage collection variables
     private var pruningJob: Job? = null
@@ -80,9 +116,15 @@ object ShipRepository {
         }
     }
 
-    fun startTracking(apiKey: String = "1a2b3c4d5e6f7g8h9i0j") {
-        if (webSocket != null) return
-        currentApiKey = apiKey
+    fun startTracking(apiKey: String? = null): Boolean {
+        val resolvedApiKey = resolveApiKey(apiKey)
+        if (resolvedApiKey == null) {
+            Log.w(TAG, "No AISStream API key configured. Live vessel tracking is disabled until a real key is added.")
+            return false
+        }
+
+        if (webSocket != null) return true
+        currentApiKey = resolvedApiKey
 
         startGarbageCollection()
 
@@ -94,7 +136,7 @@ object ShipRepository {
                 val subscription = """
                     {
                         "APIKey": "$currentApiKey",
-                        "BoundingBoxes": [[[49.0, -10.0], [61.0, 3.0]]],
+                        "BoundingBoxes": [[[-90.0, -180.0], [90.0, 180.0]]],
                         "FilterMessageTypes": ["PositionReport", "ShipStaticData"]
                     }
                 """.trimIndent()
@@ -105,11 +147,12 @@ object ShipRepository {
                 try {
                     val envelope = json.decodeFromString<AisStreamMessage>(text)
                     val metaData = envelope.metaData ?: return
-                    val mmsi = metaData.mmsi
-                    if (mmsi == 0L) return
+                    val mmsi = resolveMmsi(metaData)
 
                     val metaLat = metaData.effectiveLatitude
                     val metaLng = metaData.effectiveLongitude
+
+                    if (metaLat == 0.0 && metaLng == 0.0) return
 
                     _ships.update { currentMap ->
                         val existingShip = currentMap[mmsi] ?: ShipState(
@@ -176,7 +219,16 @@ object ShipRepository {
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.w(TAG, "WebSocket failure: ${t.message}. Operating with local vessel simulation.")
+                val status = response?.code ?: -1
+                val message = response?.message ?: "unknown"
+                val body = runCatching {
+                    response?.body?.string()
+                }.getOrNull()
+
+                Log.w(
+                    TAG,
+                    "Live AIS stream failed. HTTP=${status} message=${message} body=${body ?: "n/a"} cause=${t.message}. No mock vessel data will be injected."
+                )
                 this@ShipRepository.webSocket = null
             }
 
@@ -185,9 +237,15 @@ object ShipRepository {
                 this@ShipRepository.webSocket = null
             }
         })
+
+        return true
     }
 
     fun updateBoundingBox(north: Double, south: Double, east: Double, west: Double) {
+        if (currentApiKey.isBlank()) {
+            return
+        }
+
         // AISStream format: [[[minLat, minLon], [maxLat, maxLon]]]
         // Which translates to: [[[South, West], [North, East]]]
         val subscription = """
@@ -202,13 +260,12 @@ object ShipRepository {
     }
 
     fun stopTracking() {
-        webSocket?.close(1000, "Tracking stopped")
+        webSocket?.cancel()
         webSocket = null
 
         pruningJob?.cancel()
         pruningJob = null
 
-        client.dispatcher.executorService.shutdown()
-        client.connectionPool.evictAll()
+        currentApiKey = ""
     }
 }
