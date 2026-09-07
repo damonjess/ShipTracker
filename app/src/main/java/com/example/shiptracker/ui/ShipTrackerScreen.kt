@@ -54,6 +54,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -130,136 +131,12 @@ fun OpenShipMap(
 ) {
     val lifecycleOwner = LocalLifecycleOwner.current
 
+    val shipOverlay = remember { FolderOverlay() }
     val trackOverlay = remember { FolderOverlay() }
-    val currentShips = remember { mutableStateOf<List<ShipState>>(emptyList()) }
-    val currentOnShipClick = remember { mutableStateOf(onShipClick) }
-    currentShips.value = ships
-    currentOnShipClick.value = onShipClick
+    val markersMap = remember { mutableMapOf<Long, Marker>() }
+    val currentOnShipClick = rememberUpdatedState(onShipClick)
 
     var mapViewRef by remember { mutableStateOf<MapView?>(null) }
-
-    val vesselOverlay = remember {
-        object : Overlay() {
-            val haloFillPaints = mutableMapOf<Int, Paint>()
-            val haloStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG)
-            val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-            val arrowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-            val arrowStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG)
-            val tmpPoint = Point()
-            val tmpPath = Path()
-
-            private fun getHaloFillPaint(colorInt: Int): Paint {
-                return haloFillPaints.getOrPut(colorInt) {
-                    Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                        style = Paint.Style.FILL
-                        color = colorInt
-                        alpha = 250
-                    }
-                }
-            }
-
-            override fun draw(canvas: Canvas, mapView: MapView, shadow: Boolean) {
-                super.draw(canvas, mapView, shadow)
-                if (shadow) return
-                val density = mapView.resources.displayMetrics.density
-                val radius = 46f * density
-                val proj = mapView.projection
-
-                haloStrokePaint.apply {
-                    isAntiAlias = true
-                    style = Paint.Style.STROKE
-                    strokeWidth = 9f * density
-                    color = android.graphics.Color.WHITE
-                }
-                shadowPaint.apply {
-                    isAntiAlias = true
-                    style = Paint.Style.STROKE
-                    strokeWidth = 3f * density
-                    color = android.graphics.Color.BLACK
-                    alpha = 120
-                }
-
-                currentShips.value.forEach { ship ->
-                    val geo = GeoPoint(ship.latitude, ship.longitude)
-                    proj.toPixels(geo, tmpPoint)
-                    val cx = tmpPoint.x.toFloat()
-                    val cy = tmpPoint.y.toFloat()
-                    val colorInt = MarkerIconGenerator.getShipAndroidColor(ship.shipType)
-                    val fill = getHaloFillPaint(colorInt)
-
-                    canvas.drawCircle(cx, cy, radius + 3f * density, shadowPaint)
-                    canvas.drawCircle(cx, cy, radius, fill)
-                    canvas.drawCircle(cx, cy, radius, haloStrokePaint)
-
-                    val headDeg = ship.heading.toDouble()
-                    val headRad = Math.toRadians(headDeg - 90.0)
-                    val arrowLen = 54f * density
-                    val arrowBase = 26f * density
-
-                    val tipX = cx + (arrowLen * kotlin.math.cos(headRad)).toFloat()
-                    val tipY = cy + (arrowLen * kotlin.math.sin(headRad)).toFloat()
-                    val perpRad = headRad + Math.PI / 2.0
-                    val perpDX = (arrowBase * kotlin.math.cos(perpRad)).toFloat()
-                    val perpDY = (arrowBase * kotlin.math.sin(perpRad)).toFloat()
-                    val backX = cx - (arrowLen * 0.35f * kotlin.math.cos(headRad)).toFloat()
-                    val backY = cy - (arrowLen * 0.35f * kotlin.math.sin(headRad)).toFloat()
-
-                    tmpPath.reset()
-                    tmpPath.moveTo(tipX, tipY)
-                    tmpPath.lineTo(backX + perpDX, backY + perpDY)
-                    tmpPath.lineTo(backX - perpDX, backY - perpDY)
-                    tmpPath.close()
-
-                    arrowPaint.apply {
-                        style = Paint.Style.FILL
-                        color = android.graphics.Color.BLACK
-                        alpha = 255
-                    }
-                    canvas.drawPath(tmpPath, arrowPaint)
-
-                    arrowStrokePaint.apply {
-                        isAntiAlias = true
-                        style = Paint.Style.STROKE
-                        strokeWidth = 3f * density
-                        color = android.graphics.Color.WHITE
-                        alpha = 255
-                    }
-                    canvas.drawPath(tmpPath, arrowStrokePaint)
-                }
-            }
-
-            override fun onSingleTapConfirmed(e: MotionEvent, mapView: MapView): Boolean {
-                val density = mapView.resources.displayMetrics.density
-                val hitRadius = 220f * density
-                val tapX = e.x
-                val tapY = e.y
-                val proj = mapView.projection
-                var nearest: ShipState? = null
-                var nearestDist = Float.MAX_VALUE
-                currentShips.value.forEach { ship ->
-                    val geo = GeoPoint(ship.latitude, ship.longitude)
-                    proj.toPixels(geo, tmpPoint)
-                    val dx = tmpPoint.x - tapX
-                    val dy = tmpPoint.y - tapY
-                    val d = kotlin.math.hypot(dx, dy)
-                    if (d < nearestDist) {
-                        nearestDist = d
-                        nearest = ship
-                    }
-                }
-                val theNearest = nearest
-                if (theNearest != null && nearestDist <= hitRadius) {
-                    currentOnShipClick.value(theNearest)
-                    return true
-                }
-                return super.onSingleTapConfirmed(e, mapView)
-            }
-
-            override fun onTouchEvent(e: MotionEvent, mapView: MapView): Boolean {
-                return false
-            }
-        }
-    }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -306,7 +183,7 @@ fun OpenShipMap(
 
                 overlays.add(seamarkOverlay)
                 overlays.add(trackOverlay)
-                overlays.add(vesselOverlay)
+                overlays.add(shipOverlay)
 
                 mapViewRef = this
             }
@@ -321,6 +198,57 @@ fun OpenShipMap(
                 }
                 trackOverlay.add(polyline)
             }
+
+            val activeMmsis = ships.map { it.mmsi }.toSet()
+            val removedMmsis = markersMap.keys - activeMmsis
+            removedMmsis.forEach { mmsi ->
+                markersMap.remove(mmsi)?.let { shipOverlay.remove(it) }
+            }
+
+            // Update existing markers or instantiate new ones
+            ships.forEach { ship ->
+                val existingMarker = markersMap[ship.mmsi]
+                val colorInt = MarkerIconGenerator.getShipAndroidColor(ship.shipType)
+                val shipIcon = MarkerIconGenerator.getTintedShipIcon(mapView.context, colorInt)
+
+                if (existingMarker != null) {
+                    existingMarker.position = GeoPoint(ship.latitude, ship.longitude)
+                    existingMarker.icon = shipIcon
+                    existingMarker.rotation = ship.heading
+                    existingMarker.title = ship.name.ifEmpty { "MMSI: ${ship.mmsi}" }
+                    existingMarker.snippet = getShipTypeString(ship.shipType)
+                    
+                    // 🚨 CRITICAL FIX: Refresh the click listener!
+                    // Without this, tapping a moving ship triggers a stale Compose state.
+                    existingMarker.setOnMarkerClickListener { clickedMarker, _ ->
+                        currentOnShipClick.value(ship)
+                        clickedMarker.showInfoWindow()
+                        true 
+                    }
+                } else {
+                    val newMarker = Marker(mapView).apply {
+                        position = GeoPoint(ship.latitude, ship.longitude)
+                        title = ship.name.ifEmpty { "MMSI: ${ship.mmsi}" }
+                        snippet = getShipTypeString(ship.shipType)
+                        icon = shipIcon
+                        rotation = ship.heading
+
+                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                        
+                        // REMOVED: isFlat = true (this breaks the touch hitbox when rotated)
+
+                        setOnMarkerClickListener { clickedMarker, _ ->
+                            currentOnShipClick.value(ship)
+                            clickedMarker.showInfoWindow()
+                            true
+                        }
+                    }
+
+                    markersMap[ship.mmsi] = newMarker
+                    shipOverlay.add(newMarker)
+                }
+            }
+
             mapView.invalidate()
         }
     )

@@ -2,6 +2,7 @@ package com.example.shiptracker.util
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Color
@@ -13,61 +14,32 @@ import com.example.shiptracker.R
 import kotlin.math.roundToInt
 
 object MarkerIconGenerator {
-    private val bitmapCache = mutableMapOf<Int, Bitmap>()
-    const val MARKER_SIZE_DP = 220f
-
-    private fun buildBaseBitmap(context: Context, colorInt: Int): Bitmap {
-        val density = context.resources.displayMetrics.density
-        val sizePx = (MARKER_SIZE_DP * density).roundToInt()
-
-        val vectorDrawable = ContextCompat.getDrawable(context, R.drawable.ic_ship_arrow)?.mutate()
-            ?: run {
-                val fallback = ContextCompat.getDrawable(context, android.R.drawable.ic_dialog_map)!!
-                DrawableCompat.setTint(fallback, colorInt)
-                fallback
-            }
-        DrawableCompat.setTint(vectorDrawable, Color.BLACK)
-
-        val bitmap = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
-        val center = sizePx / 2f
-        val haloRadius = sizePx * 0.46f
-
-        val haloPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.FILL
-            color = colorInt
-            alpha = 250
-        }
-        canvas.drawCircle(center, center, haloRadius, haloPaint)
-
-        val outlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = 10f * density
-            color = Color.WHITE
-        }
-        canvas.drawCircle(center, center, haloRadius, outlinePaint)
-
-        val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = 3f * density
-            color = Color.BLACK
-            alpha = 120
-        }
-        canvas.drawCircle(center, center, haloRadius + 2.5f * density, shadowPaint)
-
-        val shipSize = (sizePx * 0.85f).roundToInt()
-        val left = (sizePx - shipSize) / 2
-        val top = (sizePx - shipSize) / 2
-        vectorDrawable.setBounds(left, top, left + shipSize, top + shipSize)
-        vectorDrawable.draw(canvas)
-
-        return bitmap
-    }
+    const val MARKER_SIZE_DP = 48f
+    private val iconCache = mutableMapOf<Int, Drawable>()
 
     fun getTintedShipIcon(context: Context, colorInt: Int): Drawable {
-        val base = bitmapCache.getOrPut(colorInt) { buildBaseBitmap(context, colorInt) }
-        val copy = base.copy(Bitmap.Config.ARGB_8888, true)!!
-        return BitmapDrawable(context.resources, copy)
+        return iconCache.getOrPut(colorInt) {
+            val vectorDrawable = ContextCompat.getDrawable(context, R.drawable.ic_ship_arrow)?.mutate()
+                ?: return@getOrPut ContextCompat.getDrawable(context, android.R.drawable.ic_dialog_map)!!
+
+            DrawableCompat.setTint(vectorDrawable, colorInt)
+
+            // Force a standard 48dp touch target size
+            val density = context.resources.displayMetrics.density
+            val sizePx = (48 * density).toInt() 
+
+            val bitmap = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(bitmap)
+            
+            // Draw the vector exactly to our bounding box
+            vectorDrawable.setBounds(0, 0, sizePx, sizePx)
+            vectorDrawable.draw(canvas)
+
+            BitmapDrawable(context.resources, bitmap).apply {
+                // CRITICAL: Tell osmdroid exactly how big this is so it doesn't double-scale
+                setBounds(0, 0, sizePx, sizePx)
+            }
+        }
     }
 
     fun getShipAndroidColor(aisTypeCode: Int): Int {
