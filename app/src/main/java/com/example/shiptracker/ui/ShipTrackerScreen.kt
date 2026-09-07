@@ -67,7 +67,6 @@ import com.example.shiptracker.data.ShipState
 import com.example.shiptracker.util.MarkerIconGenerator
 import com.google.android.gms.maps.model.LatLng
 import org.osmdroid.tileprovider.MapTileProviderBasic
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.tileprovider.tilesource.XYTileSource
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
@@ -150,8 +149,16 @@ fun OpenShipMap(
         modifier = modifier.fillMaxSize(),
         factory = { ctx ->
             MapView(ctx).apply {
-                // Use the official, compliant OpenStreetMap tile source
-                setTileSource(TileSourceFactory.MAPNIK)
+                // Configure German OpenStreetMap tile server as base layer
+                val baseSource = XYTileSource(
+                    "OSMde",
+                    0,
+                    20,
+                    256,
+                    ".png",
+                    arrayOf("https://tile.openstreetmap.de/")
+                )
+                setTileSource(baseSource)
                 setMultiTouchControls(true)
                 controller.setZoom(8.0)
                 controller.setCenter(GeoPoint(50.5, -1.5))
@@ -203,38 +210,30 @@ fun OpenShipMap(
 
             // Update existing markers or instantiate new ones
             ships.forEach { ship ->
-                val existingMarker = markersMap[ship.mmsi]
+                var marker = markersMap[ship.mmsi]
                 val colorInt = MarkerIconGenerator.getShipAndroidColor(ship.shipType)
                 val shipIcon = MarkerIconGenerator.getTintedShipIcon(mapView.context, colorInt)
 
-                if (existingMarker != null) {
-                    // Smoothly shift position and rotation without recreating the object
-                    existingMarker.position = GeoPoint(ship.latitude, ship.longitude)
-                    existingMarker.icon = shipIcon
-                    existingMarker.rotation = ship.heading
-                    existingMarker.title = ship.name.ifEmpty { "MMSI: ${ship.mmsi}" }
-                    existingMarker.snippet = getShipTypeString(ship.shipType)
-                } else {
-                    // Create marker for a newly detected vessel
-                    val newMarker = Marker(mapView).apply {
-                        position = GeoPoint(ship.latitude, ship.longitude)
-                        title = ship.name.ifEmpty { "MMSI: ${ship.mmsi}" }
-                        snippet = getShipTypeString(ship.shipType)
-                        icon = shipIcon
-                        rotation = ship.heading
-
-                        // CRITICAL properties for directional vehicle vectors
+                if (marker == null) {
+                    marker = Marker(mapView).apply {
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                         isFlat = true
-
-                        setOnMarkerClickListener { _, _ ->
-                            onShipClick(ship)
-                            true // Intercept event to trigger our Compose bottom sheet
-                        }
                     }
+                    markersMap[ship.mmsi] = marker
+                    shipOverlay.add(marker)
+                }
 
-                    markersMap[ship.mmsi] = newMarker
-                    shipOverlay.add(newMarker)
+                // Always update properties and re-bind the click listener to the latest ship data
+                marker.apply {
+                    position = GeoPoint(ship.latitude, ship.longitude)
+                    icon = shipIcon
+                    rotation = ship.heading
+                    title = ship.name.ifEmpty { "MMSI: ${ship.mmsi}" }
+                    snippet = getShipTypeString(ship.shipType)
+                    setOnMarkerClickListener { _, _ ->
+                        onShipClick(ship)
+                        true // Intercept event to trigger your Compose bottom sheet
+                    }
                 }
             }
 
@@ -291,6 +290,20 @@ fun ShipTrackerMainScreen(
                     )
                     viewModel.selectVessel(ship.mmsi)
                 }
+            )
+
+            Text(
+                text = "© OpenStreetMap contributors",
+                color = Color.Black,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(8.dp)
+                    .background(
+                        Color.White.copy(alpha = 0.85f),
+                        RoundedCornerShape(4.dp)
+                    )
+                    .padding(horizontal = 6.dp, vertical = 3.dp)
             )
 
             // The floating search bar and filter chips sit directly on top
