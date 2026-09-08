@@ -60,7 +60,9 @@ class ShipViewModel(
             
             val isRealVessel = !isBaseStation && !isBuoy
 
-            isRealVessel && (filters.isEmpty() || filters.any { filterCategory ->
+            // 🚨 FIX: Allow type 0 (Unknowns) to show immediately, 
+            // while still respecting category filters for known ships
+            isRealVessel && (ship.shipType == 0 || filters.isEmpty() || filters.any { filterCategory ->
                 ship.shipType in filterCategory.typeCodes
             })
         }

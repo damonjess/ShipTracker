@@ -1,7 +1,10 @@
 package com.example.shiptracker.ui
 
+import android.animation.ValueAnimator
 import android.content.Context
+import android.graphics.Paint
 import android.net.Uri
+import android.view.animation.LinearInterpolator
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -56,8 +59,11 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarOutline
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.FloatingActionButton
@@ -241,6 +247,26 @@ val EsriDarkGrayCanvasTileSource = object : OnlineTileSourceBase(
     }
 }
 
+// Esri World Imagery (Satellite) Tile Source
+val EsriWorldImageryTileSource = object : OnlineTileSourceBase(
+    "EsriWorldImagery",
+    0, 19, 256, ".jpg",
+    arrayOf("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/")
+) {
+    override fun getTileURLString(pMapTileIndex: Long): String {
+        val zoom = MapTileIndex.getZoom(pMapTileIndex)
+        val y = MapTileIndex.getY(pMapTileIndex)
+        val x = MapTileIndex.getX(pMapTileIndex)
+        return "$baseUrl$zoom/$y/$x$mImageFilenameEnding"
+    }
+}
+
+enum class AppMapType(val displayName: String) {
+    LIGHT("Light"),
+    DARK("Dark"),
+    SATELLITE("Satellite")
+}
+
 @Composable
 fun OpenShipMap(
     ships: List<ShipState>,
@@ -248,18 +274,21 @@ fun OpenShipMap(
     trackPoints: List<LatLng> = emptyList(),
     panTarget: ShipState? = null,
     recenterTrigger: Int = 0,
+    mapType: AppMapType = AppMapType.LIGHT,
     onPanConsumed: () -> Unit = {},
     onViewportChanged: (north: Double, south: Double, east: Double, west: Double, zoom: Double) -> Unit = { _, _, _, _, _ -> },
     onShipClick: (ShipState) -> Unit
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val isDark = isSystemInDarkTheme()
     val currentOnShipClick = rememberUpdatedState(onShipClick)
     val currentOnViewportChanged = rememberUpdatedState(onViewportChanged)
 
-    // Remove the `if (isDark)` check to force the nautical chart look
-    val activeTileSource = EsriWorldStreetMapTileSource
+    val activeTileSource = when (mapType) {
+        AppMapType.LIGHT -> EsriWorldStreetMapTileSource
+        AppMapType.DARK -> EsriDarkGrayCanvasTileSource
+        AppMapType.SATELLITE -> EsriWorldImageryTileSource
+    }
 
     val mapView = remember {
         MapView(context).apply {
@@ -273,7 +302,6 @@ fun OpenShipMap(
                     currentOnViewportChanged.value(box.latNorth, box.latSouth, box.lonEast, box.lonWest, zoomLevelDouble)
                     return false
                 }
-
                 override fun onZoom(event: ZoomEvent?): Boolean {
                     val box = boundingBox
                     currentOnViewportChanged.value(box.latNorth, box.latSouth, box.lonEast, box.lonWest, zoomLevelDouble)
@@ -283,7 +311,7 @@ fun OpenShipMap(
         }
     }
 
-    LaunchedEffect(isDark) {
+    LaunchedEffect(mapType) {
         mapView.setTileSource(activeTileSource)
         mapView.invalidate()
     }
@@ -303,7 +331,10 @@ fun OpenShipMap(
 
     val shipOverlay = remember { FolderOverlay().also { mapView.overlays.add(it) } }
     val trackOverlay = remember { FolderOverlay().also { mapView.overlays.add(it) } }
+    
     val markersMap = remember { mutableMapOf<Long, Marker>() }
+    // 🚨 NEW: Track active animations so we can cancel them if a ship updates mid-glide
+    val animatorsMap = remember { mutableMapOf<Long, ValueAnimator>() }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -317,6 +348,8 @@ fun OpenShipMap(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
+            // Clean up animators to prevent memory leaks
+            animatorsMap.values.forEach { it.cancel() } 
             mapView.onDetach()
         }
     }
@@ -326,13 +359,14 @@ fun OpenShipMap(
         factory = { mapView }
     )
 
-    val trackColorHex = if (isDark) "#00E5FF" else "#0077CC"
-    LaunchedEffect(ships, trackPoints, isDark) {
+    LaunchedEffect(ships, trackPoints) {
         trackOverlay.items.clear()
         if (trackPoints.size > 1) {
             val polyline = Polyline(mapView).apply {
-                outlinePaint.color = android.graphics.Color.parseColor(trackColorHex)
-                outlinePaint.strokeWidth = 8f
+                outlinePaint.color = android.graphics.Color.parseColor("#3483C4") // Match the Marine Blue theme
+                outlinePaint.strokeWidth = 10f // Make it slightly thicker
+                outlinePaint.strokeCap = Paint.Cap.ROUND // Give it smooth ends
+                outlinePaint.strokeJoin = Paint.Join.ROUND // Smooth corners
                 setPoints(trackPoints.map { GeoPoint(it.latitude, it.longitude) })
             }
             trackOverlay.add(polyline)
@@ -340,27 +374,62 @@ fun OpenShipMap(
 
         val activeMmsis = ships.map { it.mmsi }.toSet()
         val removedMmsis = markersMap.keys - activeMmsis
+        
         removedMmsis.forEach { mmsi ->
             markersMap.remove(mmsi)?.let { shipOverlay.remove(it) }
+            animatorsMap.remove(mmsi)?.cancel() // Stop animating deleted ships
         }
 
         ships.forEach { ship ->
             val existingMarker = markersMap[ship.mmsi]
-
             val colorInt = MarkerIconGenerator.getShipAndroidColor(ship.shipType)
-            // 🚨 Pass the whole 'ship' object into the new generator
             val shipIcon = MarkerIconGenerator.getTintedShipIcon(context, ship, colorInt)
+            
+            val targetRot = if (ship.shipType == -1) 0f else ship.heading
+            val targetPoint = GeoPoint(ship.latitude, ship.longitude)
 
             if (existingMarker != null) {
-                existingMarker.position = GeoPoint(ship.latitude, ship.longitude)
-                existingMarker.rotation = if (ship.shipType == -1) 0f else ship.heading // Stop clusters from spinning
                 existingMarker.relatedObject = ship
-                existingMarker.icon = shipIcon // Refresh icon so clusters update their numbers
+                existingMarker.icon = shipIcon
+                
+                val startPoint = existingMarker.position
+                val startRot = existingMarker.rotation
+                
+                // 🚨 NEW: Only trigger the animation if the ship actually moved or turned
+                if (startPoint.latitude != targetPoint.latitude || 
+                    startPoint.longitude != targetPoint.longitude || 
+                    startRot != targetRot) {
+                    
+                    // Cancel any currently running animation for this specific ship
+                    animatorsMap[ship.mmsi]?.cancel()
+                    
+                    val animator = ValueAnimator.ofFloat(0f, 1f).apply {
+                        duration = 1500L // 1.5 second smooth glide
+                        interpolator = LinearInterpolator()
+                        
+                        addUpdateListener { animation ->
+                            val fraction = animation.animatedFraction
+                            
+                            // 1. Interpolate Position (Glide across the map)
+                            val lat = startPoint.latitude + (targetPoint.latitude - startPoint.latitude) * fraction
+                            val lng = startPoint.longitude + (targetPoint.longitude - startPoint.longitude) * fraction
+                            existingMarker.position = GeoPoint(lat, lng)
+                            
+                            // 2. Interpolate Rotation (Calculate shortest path so it doesn't spin backwards)
+                            val deltaRot = ((targetRot - startRot + 540) % 360) - 180
+                            existingMarker.rotation = startRot + (deltaRot * fraction)
+                            
+                            mapView.invalidate()
+                        }
+                    }
+                    animatorsMap[ship.mmsi] = animator
+                    animator.start()
+                }
             } else {
                 val newMarker = Marker(mapView).apply {
-                    position = GeoPoint(ship.latitude, ship.longitude)
+                    position = targetPoint
                     icon = shipIcon
-                    rotation = if (ship.shipType == -1) 0f else ship.heading
+                    rotation = targetRot
                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                     isFlat = true
                     relatedObject = ship
@@ -369,10 +438,8 @@ fun OpenShipMap(
                         val clickedShip = clickedMarker.relatedObject as? ShipState
                         if (clickedShip != null) {
                             if (clickedShip.shipType == -1) {
-                                // 4. If they tap a cluster, smoothly zoom in closer!
                                 mapView.controller.animateTo(clickedMarker.position, mapView.zoomLevelDouble + 2.0, 500L)
                             } else {
-                                // 5. If they tap a normal ship, open the bottom sheet
                                 currentOnShipClick.value(clickedShip)
                             }
                         }
@@ -383,8 +450,6 @@ fun OpenShipMap(
                 shipOverlay.add(newMarker)
             }
         }
-
-        mapView.invalidate()
     }
 }
 
@@ -397,10 +462,15 @@ fun ShipTrackerMainScreen(
     )
 ) {
     var selectedNavIndex by remember { mutableIntStateOf(0) }
+    var currentMapType by remember { mutableStateOf(AppMapType.LIGHT) }
+    var showMapTypeMenu by remember { mutableStateOf(false) }
 
     val visibleShips by viewModel.visibleShips.collectAsState()
     val activeFilters by viewModel.selectedFilters.collectAsState()
     val trackPoints by viewModel.activeTrackPoints.collectAsState()
+    
+    // 🚨 NEW: Observe the active MMSI
+    val activeMmsi by viewModel.selectedMmsi.collectAsState()
 
     var selectedVessel by remember { mutableStateOf<Vessel?>(null) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
@@ -426,6 +496,7 @@ fun ShipTrackerMainScreen(
                 trackPoints = trackPoints,
                 panTarget = panTarget,
                 recenterTrigger = recenterTrigger,
+                mapType = currentMapType,
                 onPanConsumed = { panTarget = null },
                 onViewportChanged = { north, south, east, west, zoom ->
                     viewModel.updateViewport(north, south, east, west)
@@ -495,6 +566,51 @@ fun ShipTrackerMainScreen(
                     .align(Alignment.TopCenter)
                     .padding(16.dp)
             )
+
+            // Map Type Selector Floating Action Button & Dropdown Menu
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 210.dp, end = 16.dp)
+            ) {
+                FloatingActionButton(
+                    onClick = { showMapTypeMenu = true },
+                    modifier = Modifier.size(48.dp),
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    contentColor = MaterialTheme.colorScheme.onSurface
+                ) {
+                    Icon(imageVector = Icons.Default.Public, contentDescription = "Change Map Type")
+                }
+
+                DropdownMenu(
+                    expanded = showMapTypeMenu,
+                    onDismissRequest = { showMapTypeMenu = false }
+                ) {
+                    AppMapType.entries.forEach { type ->
+                        DropdownMenuItem(
+                            text = { Text(type.displayName) },
+                            onClick = {
+                                currentMapType = type
+                                showMapTypeMenu = false
+                            }
+                        )
+                    }
+                }
+            }
+
+            // 🚨 NEW: Show a Stop Tracking button if a track is active and the panel is closed
+            if (activeMmsi != null && selectedVessel == null) {
+                ExtendedFloatingActionButton(
+                    onClick = { viewModel.clearSelection() },
+                    icon = { Icon(Icons.Default.Close, contentDescription = "Stop Tracking") },
+                    text = { Text("Stop Tracking") },
+                    containerColor = Color(0xFF3483C4), // Marine Blue
+                    contentColor = Color.White,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 270.dp)
+                )
+            }
         }
     }
 
@@ -519,15 +635,10 @@ fun ShipTrackerMainScreen(
                     val shipToTrack = visibleShips.find { it.mmsi == selectedVessel?.mmsi }
                     if (shipToTrack != null) {
                         panTarget = shipToTrack
-                    } else {
-                        panTarget = ShipState(
-                            mmsi = selectedVessel!!.mmsi,
-                            latitude = selectedVessel!!.lat,
-                            longitude = selectedVessel!!.lng,
-                            name = selectedVessel!!.name
-                        )
                     }
-                    selectedVessel = null
+                    selectedVessel = null 
+                    // 🚨 CRITICAL: We DO NOT call clearSelection() here! 
+                    // This hides the panel but keeps the MMSI active so the Polyline stays on the map.
                 }
             )
         }
@@ -713,6 +824,15 @@ fun VesselDetailsPanel(
             horizontalArrangement = Arrangement.Center
         ) {
             BlueActionButton(icon = Icons.Default.Star, label = "Review", modifier = Modifier.weight(1f))
+            
+            // 🚨 ADDED BACK: The Track button mapped to the click handler
+            BlueActionButton(
+                icon = Icons.Default.DirectionsBoat, 
+                label = "Track", 
+                modifier = Modifier.weight(1f).clickable { onTrackClick() },
+                onClick = onTrackClick
+            )
+            
             BlueActionButton(icon = Icons.Default.Domain, label = "Deckplans", modifier = Modifier.weight(1f))
         }
 
@@ -791,10 +911,15 @@ fun VesselDetailsPanel(
 // --- NEW HELPER COMPOSABLES ---
 
 @Composable
-fun BlueActionButton(icon: ImageVector, label: String, modifier: Modifier = Modifier) {
+fun BlueActionButton(
+    icon: ImageVector, 
+    label: String, 
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit = {}
+) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = modifier.clickable { /* Handle click */ }
+        modifier = modifier.clickable { onClick() }
     ) {
         Icon(imageVector = icon, contentDescription = label, tint = Color.White, modifier = Modifier.size(24.dp))
         Text(text = label, style = MaterialTheme.typography.labelMedium, color = Color.White)
