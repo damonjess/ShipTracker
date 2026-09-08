@@ -17,6 +17,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import okio.ByteString
 
 object ShipRepository {
     private const val TAG = "ShipRepository"
@@ -34,6 +35,7 @@ object ShipRepository {
     private var vesselDao: VesselDao? = null
     private val scope = CoroutineScope(Dispatchers.IO)
     private var webSocket: WebSocket? = null
+    private var lastSubscriptionTime: Long = 0L
 
     private val placeholderApiKeys = setOf(
         "YOUR_REAL_AISSTREAM_API_KEY",
@@ -51,16 +53,8 @@ object ShipRepository {
     }
 
     private fun resolveApiKey(explicitApiKey: String?): String? {
-        val fromArgument = explicitApiKey?.trim()
-        if (fromArgument != null) {
-            if (isPlaceholderApiKey(fromArgument)) return null
-            if (fromArgument.isNotEmpty()) return fromArgument
-        }
-
-        val fromBuildConfig = BuildConfig.AIS_STREAM_API_KEY.trim()
-        if (fromBuildConfig.isNotEmpty() && !isPlaceholderApiKey(fromBuildConfig)) return fromBuildConfig
-
-        return null
+        // Force the app to use your key, bypassing the VSCode build config
+        return "f35c030db565d8a5a1b3eeeb45461925819af918"
     }
 
     private fun resolveMmsi(metaData: AisMetaData): Long {
@@ -72,7 +66,9 @@ object ShipRepository {
 
     // Garbage collection variables
     private var pruningJob: Job? = null
-    private const val STALE_TIMEOUT_MILLIS = 15 * 60 * 1000L
+    // 🚨 UPDATE: Change this from 15 minutes to 12 hours
+    // This keeps parked/sleeping ships on your map even if they stop transmitting
+    private const val STALE_TIMEOUT_MILLIS = 12 * 60 * 60 * 1000L
 
     fun initialize(dao: VesselDao) {
         vesselDao = dao
@@ -133,6 +129,10 @@ object ShipRepository {
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 Log.d(TAG, "WebSocket connected")
+
+                // Track when we sent the first subscription
+                lastSubscriptionTime = System.currentTimeMillis()
+
                 val subscription = """
                     {
                         "APIKey": "$currentApiKey",
@@ -141,6 +141,11 @@ object ShipRepository {
                     }
                 """.trimIndent()
                 webSocket.send(subscription)
+            }
+
+            // 🚨 FIX 1: Catch the binary frames and convert them to text
+            override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                onMessage(webSocket, bytes.utf8())
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -246,8 +251,14 @@ object ShipRepository {
             return
         }
 
-        // AISStream format: [[[minLat, minLon], [maxLat, maxLon]]]
-        // Which translates to: [[[South, West], [North, East]]]
+        // 🚨 FIX 2: Enforce a hard 1.5-second gap between updates
+        val now = System.currentTimeMillis()
+        if (now - lastSubscriptionTime < 1500) {
+            Log.w(TAG, "Throttling bounding box update to prevent AISStream disconnect")
+            return 
+        }
+        lastSubscriptionTime = now
+
         val subscription = """
             {
                 "APIKey": "$currentApiKey",

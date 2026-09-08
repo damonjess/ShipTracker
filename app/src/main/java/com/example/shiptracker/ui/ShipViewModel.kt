@@ -38,21 +38,63 @@ class ShipViewModel(
     private val _selectedFilters = MutableStateFlow<Set<ShipCategory>>(emptySet())
     val selectedFilters: StateFlow<Set<ShipCategory>> = _selectedFilters.asStateFlow()
 
+    // Zoom state for map clustering
+    private val _currentZoom = MutableStateFlow(10.0)
+
+    fun updateZoom(zoom: Double) {
+        _currentZoom.value = zoom
+    }
+
     // 2. The combined reactive stream for the UI
     val visibleShips: StateFlow<List<ShipState>> = combine(
         repository.ships,
-        _selectedFilters
-    ) { shipMap, filters ->
-        val allShips = shipMap.values
+        _selectedFilters,
+        _currentZoom
+    ) { shipMap, filters, zoom ->
+        // 🚨 FIX: Bring back Type 0 ships, but filter out radio towers and buoys mathematically
+        val allShips = shipMap.values.filter { ship ->
+            // Base stations start with "00" (which becomes a 7-digit number when saved as a Long)
+            val isBaseStation = ship.mmsi < 100_000_000L
+            // Navigational Aids (Buoys/Lighthouses) always start with "99"
+            val isBuoy = ship.mmsi in 990_000_000L..999_999_999L
+            
+            val isRealVessel = !isBaseStation && !isBuoy
 
-        // If no filters are selected, show everything
-        if (filters.isEmpty()) {
-            allShips.toList()
+            isRealVessel && (filters.isEmpty() || filters.any { filterCategory ->
+                ship.shipType in filterCategory.typeCodes
+            })
+        }
+
+        // Determine grid square size based on zoom level
+        val gridSize = when {
+            zoom < 5.0 -> 2.0     // Europe view -> Huge grid
+            zoom < 7.0 -> 1.0     // Country view -> Large grid
+            zoom < 9.0 -> 0.25    // Regional view -> Small grid
+            else -> 0.0           // Zoomed in -> No clustering
+        }
+
+        if (gridSize == 0.0) {
+            allShips
         } else {
-            // Otherwise, only keep ships whose AIS code falls into an active filter range
-            allShips.filter { ship ->
-                filters.any { filterCategory ->
-                    ship.shipType in filterCategory.typeCodes
+            // Group ships by their nearest mathematical grid coordinate
+            val grouped = allShips.groupBy {
+                val gridLat = (it.latitude / gridSize).toInt() * gridSize
+                val gridLng = (it.longitude / gridSize).toInt() * gridSize
+                Pair(gridLat, gridLng)
+            }
+
+            grouped.map { (coords, shipsInCluster) ->
+                if (shipsInCluster.size == 1) {
+                    shipsInCluster.first()
+                } else {
+                    // Create a pseudo-ship to represent the cluster
+                    ShipState(
+                        mmsi = -shipsInCluster.size.toLong(), // Negative MMSI stores the ship count
+                        latitude = coords.first + (gridSize / 2),
+                        longitude = coords.second + (gridSize / 2),
+                        name = "CLUSTER",
+                        shipType = -1 // Special flag to tell the UI to draw a circle
+                    )
                 }
             }
         }
@@ -103,10 +145,11 @@ class ShipViewModel(
     private var viewportJob: Job? = null
 
     fun updateViewport(north: Double, south: Double, east: Double, west: Double) {
-        viewportJob?.cancel() // Cancel the previous timer if the user is still swiping
+        viewportJob?.cancel() 
 
         viewportJob = viewModelScope.launch {
-            delay(800) // Wait 800 milliseconds for the map to settle
+            // INCREASED to 1500ms to safely respect the 1-second rate limit
+            delay(1500) 
             repository.updateBoundingBox(north, south, east, west)
         }
     }

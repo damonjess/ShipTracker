@@ -1,7 +1,11 @@
 package com.example.shiptracker.ui
 
 import android.content.Context
+import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -13,6 +17,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -28,7 +33,17 @@ import androidx.compose.material.icons.filled.AddAPhoto
 import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.DirectionsBoat
+import androidx.compose.material.icons.filled.Domain
+import androidx.compose.material.icons.filled.Explore
+import androidx.compose.material.icons.filled.NearMe
+import androidx.compose.material.icons.filled.People
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Straighten
+import androidx.compose.material.icons.filled.Thermostat
+import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -39,6 +54,9 @@ import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarOutline
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -72,12 +90,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -87,13 +107,20 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
+import coil.compose.AsyncImagePainter
 import coil.request.ImageRequest
 import com.example.shiptracker.R
 import com.example.shiptracker.data.ShipCategory
 import com.example.shiptracker.data.ShipState
 import com.example.shiptracker.util.MarkerIconGenerator
 import com.google.android.gms.maps.model.LatLng
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.json.JSONObject
+import java.net.URLEncoder
 import org.osmdroid.events.MapListener
 import org.osmdroid.events.ScrollEvent
 import org.osmdroid.events.ZoomEvent
@@ -125,20 +152,25 @@ data class Vessel(
     val navStatusCode: Int = 15,
     val heading: Float = 0f,
     val lastReport: String = "",
-    val flagEmoji: String = "🇬🇧"
+    val flagEmoji: String = "🇬🇧",
+    val yearBuilt: String = "N/A",
+    val passengers: String = "N/A"
 )
 
 fun getShipTypeString(aisTypeCode: Int): String {
     return when (aisTypeCode) {
-        in 20..29 -> "Wing in Ground"
+        in 20..29 -> "Wing in Ground (WIG)"
         30 -> "Fishing vessel"
-        in 31..32 -> "Towing"
-        in 36..37 -> "Pleasure Craft / Yacht"
-        in 40..49 -> "High Speed Craft"
+        in 31..32 -> "Towing / Tug"
+        in 33..35 -> "Dredging / Military ops"
+        in 36..37 -> "Pleasure Craft / Sailing"
+        in 40..49 -> "High Speed Craft (HSC)"
+        in 50..59 -> "Pilot / SAR / Special"
         in 60..69 -> "Passenger vessel"
         in 70..79 -> "Cargo vessel"
         in 80..89 -> "Tanker"
-        else -> "Other ($aisTypeCode)"
+        in 90..99 -> "Other / Special"
+        else -> "Unspecified ($aisTypeCode)"
     }
 }
 
@@ -217,7 +249,7 @@ fun OpenShipMap(
     panTarget: ShipState? = null,
     recenterTrigger: Int = 0,
     onPanConsumed: () -> Unit = {},
-    onViewportChanged: (north: Double, south: Double, east: Double, west: Double) -> Unit = { _, _, _, _ -> },
+    onViewportChanged: (north: Double, south: Double, east: Double, west: Double, zoom: Double) -> Unit = { _, _, _, _, _ -> },
     onShipClick: (ShipState) -> Unit
 ) {
     val context = LocalContext.current
@@ -226,7 +258,8 @@ fun OpenShipMap(
     val currentOnShipClick = rememberUpdatedState(onShipClick)
     val currentOnViewportChanged = rememberUpdatedState(onViewportChanged)
 
-    val activeTileSource = if (isDark) EsriDarkGrayCanvasTileSource else EsriWorldStreetMapTileSource
+    // Remove the `if (isDark)` check to force the nautical chart look
+    val activeTileSource = EsriWorldStreetMapTileSource
 
     val mapView = remember {
         MapView(context).apply {
@@ -237,13 +270,13 @@ fun OpenShipMap(
             addMapListener(object : MapListener {
                 override fun onScroll(event: ScrollEvent?): Boolean {
                     val box = boundingBox
-                    currentOnViewportChanged.value(box.latNorth, box.latSouth, box.lonEast, box.lonWest)
+                    currentOnViewportChanged.value(box.latNorth, box.latSouth, box.lonEast, box.lonWest, zoomLevelDouble)
                     return false
                 }
 
                 override fun onZoom(event: ZoomEvent?): Boolean {
                     val box = boundingBox
-                    currentOnViewportChanged.value(box.latNorth, box.latSouth, box.lonEast, box.lonWest)
+                    currentOnViewportChanged.value(box.latNorth, box.latSouth, box.lonEast, box.lonWest, zoomLevelDouble)
                     return false
                 }
             })
@@ -313,18 +346,21 @@ fun OpenShipMap(
 
         ships.forEach { ship ->
             val existingMarker = markersMap[ship.mmsi]
+
+            val colorInt = MarkerIconGenerator.getShipAndroidColor(ship.shipType)
+            // 🚨 Pass the whole 'ship' object into the new generator
+            val shipIcon = MarkerIconGenerator.getTintedShipIcon(context, ship, colorInt)
+
             if (existingMarker != null) {
                 existingMarker.position = GeoPoint(ship.latitude, ship.longitude)
-                existingMarker.rotation = ship.heading
+                existingMarker.rotation = if (ship.shipType == -1) 0f else ship.heading // Stop clusters from spinning
                 existingMarker.relatedObject = ship
+                existingMarker.icon = shipIcon // Refresh icon so clusters update their numbers
             } else {
-                val colorInt = MarkerIconGenerator.getShipAndroidColor(ship.shipType)
-                val shipIcon = MarkerIconGenerator.getTintedShipIcon(context, colorInt)
-
                 val newMarker = Marker(mapView).apply {
                     position = GeoPoint(ship.latitude, ship.longitude)
                     icon = shipIcon
-                    rotation = ship.heading
+                    rotation = if (ship.shipType == -1) 0f else ship.heading
                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                     isFlat = true
                     relatedObject = ship
@@ -332,7 +368,13 @@ fun OpenShipMap(
                     setOnMarkerClickListener { clickedMarker, _ ->
                         val clickedShip = clickedMarker.relatedObject as? ShipState
                         if (clickedShip != null) {
-                            currentOnShipClick.value(clickedShip)
+                            if (clickedShip.shipType == -1) {
+                                // 4. If they tap a cluster, smoothly zoom in closer!
+                                mapView.controller.animateTo(clickedMarker.position, mapView.zoomLevelDouble + 2.0, 500L)
+                            } else {
+                                // 5. If they tap a normal ship, open the bottom sheet
+                                currentOnShipClick.value(clickedShip)
+                            }
                         }
                         true
                     }
@@ -385,8 +427,9 @@ fun ShipTrackerMainScreen(
                 panTarget = panTarget,
                 recenterTrigger = recenterTrigger,
                 onPanConsumed = { panTarget = null },
-                onViewportChanged = { north, south, east, west ->
+                onViewportChanged = { north, south, east, west, zoom ->
                     viewModel.updateViewport(north, south, east, west)
+                    viewModel.updateZoom(zoom)
                 },
                 onShipClick = { ship ->
                     selectedVessel = Vessel(
@@ -405,7 +448,9 @@ fun ShipTrackerMainScreen(
                         navStatusCode = ship.navStatus,
                         heading = ship.heading,
                         lastReport = formatLastReportTimestamp(ship.lastSeenMillis),
-                        flagEmoji = getCountryFlag(ship.mmsi)
+                        flagEmoji = getCountryFlag(ship.mmsi),
+                        yearBuilt = "N/A",
+                        passengers = if (ship.shipType in 60..69) "Available" else "N/A"
                     )
                     viewModel.selectVessel(ship.mmsi)
                 }
@@ -588,35 +633,30 @@ fun VesselDetailsPanel(
     onTrackClick: () -> Unit = {}
 ) {
     val context = LocalContext.current
-    val coroutineScope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
-
-    var portCallsExpanded by remember { mutableStateOf(false) }
-    var weatherExpanded by remember { mutableStateOf(false) }
-    var isInFleet by remember { mutableStateOf(false) }
+    
+    // The exact blue from the screenshot
+    val marineBlue = Color(0xFF3483C4)
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .verticalScroll(scrollState)
             .background(Color.White)
+            .verticalScroll(scrollState)
+            .navigationBarsPadding()
     ) {
-        // 1. TOP BLUE BANNER
+        // 1. TOP BLUE BANNER (Flat)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(Color(0xFF235DB2))
-                .padding(horizontal = 12.dp, vertical = 10.dp),
+                .background(marineBlue)
+                .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = vessel.flagEmoji,
-                fontSize = 24.sp,
-                modifier = Modifier.padding(end = 10.dp)
-            )
+            Text(text = vessel.flagEmoji, fontSize = 28.sp, modifier = Modifier.padding(end = 12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = vessel.name.uppercase(),
+                    text = vessel.name, // Not uppercase, matching screenshot
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     color = Color.White
@@ -624,32 +664,34 @@ fun VesselDetailsPanel(
                 Text(
                     text = vessel.type,
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color.White.copy(alpha = 0.85f)
+                    color = Color.White
                 )
             }
-            IconButton(
-                onClick = onClose,
-                modifier = Modifier.size(28.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Close,
-                    contentDescription = "Close",
-                    tint = Color.White
-                )
+            IconButton(onClick = onClose, modifier = Modifier.size(28.dp)) {
+                Icon(imageVector = Icons.Default.Close, contentDescription = "Close", tint = Color.White)
             }
         }
 
-        // 2. HERO IMAGE
+        // 2. HERO IMAGE (No gradient, no text overlay)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(210.dp)
-                .background(Color(0xFF1E293B))
+                .height(220.dp)
+                .background(Color(0xFFE0E0E0)),
+            contentAlignment = Alignment.Center
         ) {
+            Icon(
+                imageVector = Icons.Default.DirectionsBoat,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.5f),
+                modifier = Modifier.size(80.dp)
+            )
+
             val imageRequest = remember(vessel.mmsi) {
                 ImageRequest.Builder(context)
                     .data("https://photos.marinetraffic.com/ais/showphoto.aspx?mmsi=${vessel.mmsi}")
-                    .addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                    .addHeader("User-Agent", "Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36")
+                    .addHeader("Referer", "https://www.marinetraffic.com/")
                     .crossfade(true)
                     .build()
             }
@@ -658,294 +700,143 @@ fun VesselDetailsPanel(
                 model = imageRequest,
                 contentDescription = "Photo of ${vessel.name}",
                 contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-                error = painterResource(id = R.drawable.ic_ship_arrow)
-            )
-
-            Text(
-                text = "ShipTracker",
-                style = MaterialTheme.typography.labelSmall,
-                color = Color.White.copy(alpha = 0.6f),
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(8.dp)
+                modifier = Modifier.fillMaxSize()
             )
         }
 
-        // 3. ACTION BUTTONS ROW
+        // 3. BLUE ACTION BAR
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 10.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly
+                .background(marineBlue)
+                .padding(vertical = 8.dp),
+            horizontalArrangement = Arrangement.Center
         ) {
-            ActionButton(
-                icon = Icons.Default.Info,
-                label = "Details",
-                color = Color(0xFF235DB2),
-                onClick = {
-                    portCallsExpanded = true
-                    weatherExpanded = true
-                    coroutineScope.launch {
-                        scrollState.animateScrollTo(scrollState.maxValue)
-                    }
-                    Toast.makeText(context, "Expanded details for ${vessel.name}", Toast.LENGTH_SHORT).show()
-                }
-            )
-
-            ActionButton(
-                icon = Icons.Default.DirectionsBoat,
-                label = "Track",
-                color = Color(0xFF235DB2),
-                onClick = {
-                    Toast.makeText(context, "Tracking ${vessel.name} on map", Toast.LENGTH_SHORT).show()
-                    onTrackClick()
-                }
-            )
-
-            ActionButton(
-                icon = Icons.Default.AddAPhoto,
-                label = "Add photo",
-                color = Color.Gray,
-                onClick = {
-                    Toast.makeText(context, "Photo upload for ${vessel.name} coming soon!", Toast.LENGTH_SHORT).show()
-                }
-            )
-
-            ActionButton(
-                icon = if (isInFleet) Icons.Default.Star else Icons.Default.StarOutline,
-                label = if (isInFleet) "In fleet" else "Add to fleet",
-                color = if (isInFleet) Color(0xFFFFB300) else Color.Gray,
-                onClick = {
-                    isInFleet = !isInFleet
-                    val msg = if (isInFleet) "Added ${vessel.name} to My Fleets" else "Removed ${vessel.name} from My Fleets"
-                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                }
-            )
+            BlueActionButton(icon = Icons.Default.Star, label = "Review", modifier = Modifier.weight(1f))
+            BlueActionButton(icon = Icons.Default.Domain, label = "Deckplans", modifier = Modifier.weight(1f))
         }
 
-        HorizontalDivider(color = Color.LightGray.copy(alpha = 0.5f))
+        Spacer(modifier = Modifier.height(16.dp))
 
-        // 4. DESTINATION SECTION
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            verticalAlignment = Alignment.Top
-        ) {
-            Surface(
-                color = Color.LightGray.copy(alpha = 0.3f),
-                shape = RoundedCornerShape(4.dp),
-                modifier = Modifier.size(32.dp)
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text(text = "?", fontWeight = FontWeight.Bold, color = Color.DarkGray)
-                }
-            }
-            Spacer(modifier = Modifier.width(10.dp))
-            Column {
-                Text(text = "Destination", style = MaterialTheme.typography.labelMedium, color = Color.Gray)
-                Text(
-                    text = if (vessel.destination.isNotBlank() && vessel.destination != "UNKNOWN") vessel.destination else "Destination not available",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.Black
+        // 4. THE 3-COLUMN DATA GRID
+        Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+            // Top Row
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                BlueGridCell(
+                    icon = Icons.Default.DateRange,
+                    label = "Year of built",
+                    value = vessel.yearBuilt.ifEmpty { "N/A" },
+                    modifier = Modifier.weight(1f)
                 )
-                Text(text = "ETA: -", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, color = Color.Black)
-            }
-        }
-
-        HorizontalDivider(color = Color.LightGray.copy(alpha = 0.5f))
-
-        // 5. TELEMETRY GRID
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = Icons.Default.Navigation,
-                contentDescription = null,
-                tint = Color(0xFF235DB2),
-                modifier = Modifier
-                    .size(24.dp)
-                    .rotate(vessel.heading)
-            )
-            Spacer(modifier = Modifier.width(12.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column {
-                    Text(text = "Speed:", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-                    Text(text = vessel.speed.ifEmpty { "-" }, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = Color.Black)
-                }
-                Column {
-                    Text(text = "Course:", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-                    Text(text = vessel.course.ifEmpty { "${vessel.heading.toInt()}°" }, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = Color.Black)
-                }
-                Column {
-                    Text(text = "Draught:", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-                    Text(text = vessel.draught.ifEmpty { "-" }, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = Color.Black)
-                }
-            }
-        }
-
-        HorizontalDivider(color = Color.LightGray.copy(alpha = 0.3f))
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 48.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Column {
-                Text(text = "Status:", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-                Text(text = vessel.navStatusText.ifEmpty { "-" }, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium, color = Color.Black)
-            }
-            Column {
-                Text(text = "Last report:", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-                Text(text = vessel.lastReport, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, color = Color.Black)
-            }
-        }
-
-        HorizontalDivider(color = Color.LightGray.copy(alpha = 0.5f))
-
-        // 6. POSITION & REPORT BLOCK
-        Column(modifier = Modifier.padding(12.dp)) {
-            Text(text = "Current Position", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(text = vessel.flagEmoji, fontSize = 16.sp, modifier = Modifier.padding(end = 6.dp))
-                Text(
-                    text = "${String.format(Locale.US, "%.4f", vessel.lat)}°, ${String.format(Locale.US, "%.4f", vessel.lng)}°",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = Color(0xFF235DB2)
+                BlueGridCell(
+                    icon = Icons.Default.Straighten,
+                    label = "Length (LOA)",
+                    value = vessel.length.ifEmpty { "n/a" },
+                    modifier = Modifier.weight(1f)
+                )
+                BlueGridCell(
+                    icon = Icons.Default.People,
+                    label = "Passengers",
+                    value = vessel.passengers.ifEmpty { "N/A" },
+                    modifier = Modifier.weight(1f)
                 )
             }
-            Text(
-                text = "Last AIS report: ${vessel.lastReport}",
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.Bold,
-                color = Color.Black
-            )
-        }
-
-        // 7. BLUE SECTION ACCORDION BANNERS
-        AccordionHeader(
-            title = "PORT CALLS",
-            expanded = portCallsExpanded,
-            onClick = { portCallsExpanded = !portCallsExpanded }
-        )
-        if (portCallsExpanded) {
-            Text(
-                text = "No recent port calls recorded",
-                style = MaterialTheme.typography.bodySmall,
-                color = Color.Gray,
-                modifier = Modifier.padding(12.dp)
-            )
-        }
-
-        AccordionHeader(
-            title = "WEATHER",
-            expanded = weatherExpanded,
-            onClick = { weatherExpanded = !weatherExpanded }
-        )
-        if (weatherExpanded) {
-            Text(
-                text = "Wind: 12 kn NE • Waves: 0.8 m • Temp: 16°C",
-                style = MaterialTheme.typography.bodySmall,
-                color = Color.Black,
-                modifier = Modifier.padding(12.dp)
-            )
-        }
-
-        AccordionHeader(title = "VESSEL PARTICULARS", expanded = true, onClick = {})
-
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                ParticularItem(label = "Gross Tonnage:", value = "-")
-                ParticularItem(label = "Built:", value = "-")
-                ParticularItem(label = "IMO:", value = "-")
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                ParticularItem(label = "Deadweight:", value = "-")
-                ParticularItem(label = "Size:", value = vessel.length.ifEmpty { "-" })
-                ParticularItem(label = "MMSI:", value = vessel.mmsi.toString())
+            
+            Spacer(modifier = Modifier.height(16.dp))
+            
+            // Bottom Row
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                BlueGridCell(
+                    icon = Icons.Default.NearMe,
+                    label = "Destination",
+                    value = vessel.destination.ifEmpty { "n/a" },
+                    modifier = Modifier.weight(1f)
+                )
+                BlueGridCell(
+                    icon = Icons.Default.Schedule,
+                    label = "Last Report", // Swapped ETA for Last Report since we have that data
+                    value = vessel.lastReport,
+                    modifier = Modifier.weight(1f)
+                )
+                BlueGridCell(
+                    icon = Icons.Default.Speed,
+                    label = "Speed",
+                    value = vessel.speed.ifEmpty { "n/a" },
+                    modifier = Modifier.weight(1f)
+                )
             }
         }
 
         Spacer(modifier = Modifier.height(24.dp))
+        HorizontalDivider(color = Color.LightGray.copy(alpha = 0.5f))
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // 5. WEATHER FOOTER (Visual Placeholder matching your screenshot)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            WeatherCell(icon = Icons.Default.WbSunny, iconTint = Color(0xFFFFC107), topText = "63°F", bottomText = "17.3°C")
+            WeatherCell(icon = Icons.Default.Explore, iconTint = Color.Gray, topText = "Fresh breeze", bottomText = "8.2 m/s")
+            WeatherCell(icon = Icons.Default.Thermostat, iconTint = Color.Gray, topText = "65 °F / 19 °C", bottomText = "54 °F / 12 °C", topColor = Color.Red, bottomColor = marineBlue)
+        }
+
+        Spacer(modifier = Modifier.height(48.dp))
     }
 }
 
+// --- NEW HELPER COMPOSABLES ---
+
 @Composable
-fun ActionButton(
-    icon: ImageVector,
-    label: String,
-    color: Color,
-    onClick: () -> Unit = {}
-) {
+fun BlueActionButton(icon: ImageVector, label: String, modifier: Modifier = Modifier) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 4.dp)
+        modifier = modifier.clickable { /* Handle click */ }
     ) {
-        Icon(imageVector = icon, contentDescription = label, tint = color, modifier = Modifier.size(24.dp))
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(text = label, style = MaterialTheme.typography.labelSmall, color = color)
+        Icon(imageVector = icon, contentDescription = label, tint = Color.White, modifier = Modifier.size(24.dp))
+        Text(text = label, style = MaterialTheme.typography.labelMedium, color = Color.White)
     }
 }
 
 @Composable
-fun AccordionHeader(
-    title: String,
-    expanded: Boolean,
-    onClick: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(Color(0xFF235DB2))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
+fun BlueGridCell(icon: ImageVector, label: String, value: String, modifier: Modifier = Modifier) {
+    val marineBlue = Color(0xFF3483C4)
+    Column(modifier = modifier) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(imageVector = icon, contentDescription = null, tint = marineBlue, modifier = Modifier.size(16.dp))
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(text = label, style = MaterialTheme.typography.labelSmall, color = marineBlue)
+        }
+        HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp), color = marineBlue, thickness = 1.5.dp)
         Text(
-            text = title,
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.Bold,
-            color = Color.White
-        )
-        Icon(
-            imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-            contentDescription = null,
-            tint = Color.White
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color.DarkGray,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }
 
 @Composable
-fun ParticularItem(label: String, value: String) {
-    Column {
-        Text(text = label, style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-        Text(text = value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = Color.Black)
+fun WeatherCell(
+    icon: ImageVector, 
+    iconTint: Color, 
+    topText: String, 
+    bottomText: String, 
+    topColor: Color = Color.DarkGray, 
+    bottomColor: Color = Color.Gray
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(imageVector = icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(36.dp))
+        Spacer(modifier = Modifier.width(8.dp))
+        Column {
+            Text(text = topText, style = MaterialTheme.typography.labelMedium, color = topColor)
+            Text(text = bottomText, style = MaterialTheme.typography.labelMedium, color = bottomColor)
+        }
     }
 }
 
@@ -982,20 +873,50 @@ fun VesselDetailsPanelPreview() {
     val sampleVessel = Vessel(
         mmsi = 232048202L,
         name = "BRAVE GRIFF",
-        type = "Fishing vessel",
+        type = "Passenger vessel",
         lat = 53.6,
         lng = -0.1,
-        length = "-",
-        speed = "4.9 kn",
+        length = "120 m",
+        speed = "14.9 kn",
         course = "103°",
-        destination = "Destination not available",
-        draught = "-",
+        destination = "Rotterdam",
+        draught = "4.2 m",
         status = "Live AIS position",
         navStatusText = "Under way using engine",
         navStatusCode = 0,
         heading = 103f,
         lastReport = "Sep 07, 2026 12:50 UTC",
-        flagEmoji = "🇬🇧"
+        flagEmoji = "🇬🇧",
+        yearBuilt = "2018",
+        passengers = "450"
     )
     VesselDetailsPanel(vessel = sampleVessel)
+}
+
+suspend fun fetchWikipediaImageFallback(shipName: String): String? = withContext(Dispatchers.IO) {
+    val client = OkHttpClient()
+    // Append "ship" to the query to heavily weight the search towards vessels
+    val query = URLEncoder.encode("$shipName ship", "UTF-8")
+    
+    // The Wikipedia API endpoint to search and return primary page thumbnails
+    val url = "https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=$query&prop=pageimages&pithumbsize=800&format=json"
+    
+    try {
+        val request = Request.Builder().url(url).build()
+        client.newCall(request).execute().use { response ->
+            val jsonString = response.body?.string() ?: return@withContext null
+            val json = JSONObject(jsonString)
+            
+            // Navigate the JSON tree: query -> pages -> {first_page} -> thumbnail -> source
+            val pages = json.optJSONObject("query")?.optJSONObject("pages")
+            if (pages != null && pages.keys().hasNext()) {
+                val firstPageKey = pages.keys().next()
+                val page = pages.optJSONObject(firstPageKey)
+                return@withContext page?.optJSONObject("thumbnail")?.optString("source")
+            }
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+    return@withContext null
 }
