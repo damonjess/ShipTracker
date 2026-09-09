@@ -4,8 +4,11 @@ import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.DashPathEffect
 import android.graphics.Paint
+import android.net.Uri
 import android.view.View
 import android.view.animation.LinearInterpolator
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -99,7 +102,6 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
-import coil.compose.AsyncImagePainter
 import coil.request.ImageRequest
 import com.example.shiptracker.data.ShipCategory
 import com.example.shiptracker.data.ShipState
@@ -1138,58 +1140,60 @@ fun VesselDetailsPanel(
                         .height(200.dp)
                         .padding(horizontal = 12.dp)
                         .clip(RoundedCornerShape(6.dp))
-                        .background(Color(0xFFE2E8F0)),
+                        .background(Color(0xFF1E293B)),
                     contentAlignment = Alignment.Center
                 ) {
-                    var photoStage by remember(vessel.mmsi) { mutableIntStateOf(0) }
-                    var photoUrl by remember(vessel.mmsi) { mutableStateOf<String?>(null) }
-                    var photoLookupDone by remember(vessel.mmsi) { mutableStateOf(false) }
+                    // Fallback icon
+                    Icon(
+                        imageVector = Icons.Default.DirectionsBoat,
+                        contentDescription = null,
+                        tint = Color.White.copy(alpha = 0.15f),
+                        modifier = Modifier.size(80.dp)
+                    )
 
-                    LaunchedEffect(vessel.mmsi, vessel.imo, vessel.name) {
-                        if (!photoLookupDone) {
-                            val photo = fetchVesselPhoto(vessel.imo, vessel.name)
-                            photoLookupDone = true
-                            if (photo != null) {
-                                photoUrl = photo
-                            } else {
-                                photoStage = 1
-                            }
+                    var localPhotoUri by remember(vessel.mmsi, vessel.imo) { mutableStateOf<Uri?>(null) }
+                    val photoPickerLauncher = rememberLauncherForActivityResult(
+                        contract = ActivityResultContracts.GetContent()
+                    ) { uri: Uri? ->
+                        if (uri != null) {
+                            localPhotoUri = uri
                         }
                     }
 
-                    if (photoStage < 2) {
-                        val currentModel = when (photoStage) {
-                            0 -> photoUrl?.let {
-                                ImageRequest.Builder(context)
-                                    .data(it)
-                                    .addHeader("User-Agent", "ShipTrackerApp/1.0 (Android; VesselTracker)")
-                                    .crossfade(true)
-                                    .build()
-                            }
-                            else -> ImageRequest.Builder(context)
-                                .data(getDefaultVesselPhotoUrl(vessel.detailedType))
+                    // 🚨 FIX: Only ask the internet for a photo if it is a commercial ship with an IMO
+                    val imoNum = vessel.imo.toLongOrNull() ?: 0L
+                    var photoUrl by remember(vessel.mmsi, vessel.imo) { mutableStateOf<String?>(null) }
+
+                    LaunchedEffect(vessel.mmsi, vessel.imo) {
+                        if (imoNum > 0L) {
+                            photoUrl = fetchVesselPhoto("IMO ${vessel.imo}", vessel.imo, vessel.name)
+                        } else {
+                            photoUrl = null
+                        }
+                    }
+
+                    val imageRequest = remember(vessel.mmsi, vessel.imo, photoUrl) {
+                        if (imoNum > 0L && photoUrl != null) {
+                            ImageRequest.Builder(context)
+                                .data(photoUrl)
                                 .addHeader("User-Agent", "ShipTrackerApp/1.0 (Android; VesselTracker)")
                                 .crossfade(true)
                                 .build()
-                        }
-
-                        if (currentModel != null) {
-                            AsyncImage(
-                                model = currentModel,
-                                contentDescription = "Photo of ${vessel.name}",
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.fillMaxSize(),
-                                onState = { state ->
-                                    if (state is AsyncImagePainter.State.Error) {
-                                        photoStage = when (photoStage) {
-                                            0 -> 1
-                                            else -> 2
-                                        }
-                                    }
-                                }
-                            )
+                        } else {
+                            // It's a small Class B boat. Return null so Coil skips the network 
+                            // request and gracefully reveals the blue silhouette underneath.
+                            null
                         }
                     }
+
+                    AsyncImage(
+                        // Coil will use the local photo if they uploaded one, 
+                        // try the network if it has an IMO, or stay transparent if null
+                        model = localPhotoUri ?: imageRequest,
+                        contentDescription = "Photo of ${vessel.name}",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
 
                     Row(
                         modifier = Modifier
@@ -1204,7 +1208,9 @@ fun VesselDetailsPanel(
                                 shape = RoundedCornerShape(4.dp),
                                 color = Color.White.copy(alpha = 0.92f),
                                 shadowElevation = 2.dp,
-                                modifier = Modifier.clickable { }
+                                modifier = Modifier.clickable {
+                                    photoPickerLauncher.launch("image/*")
+                                }
                             ) {
                                 Row(
                                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
@@ -1241,7 +1247,7 @@ fun VesselDetailsPanel(
                             color = Color.Black.copy(alpha = 0.65f)
                         ) {
                             Text(
-                                text = if (photoStage == 0 && photoUrl != null) "© Wikimedia / Open License" else "© Maritime Community",
+                                text = if (localPhotoUri != null) "User Photo" else if (photoUrl != null) "© Wikimedia / Open License" else "© Maritime Community",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = Color.White,
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
@@ -1628,26 +1634,48 @@ fun getDefaultVesselPhotoUrl(type: String): String {
 
 private val vesselPhotoCache = ConcurrentHashMap<String, String>()
 
-suspend fun fetchVesselPhoto(imo: String, shipName: String): String? = withContext(Dispatchers.IO) {
-    val cacheKey = if (imo.isNotBlank() && imo != "N/A") "IMO_$imo" else "NAME_$shipName"
+fun getWikimediaImageUrl(searchTerm: String): String {
+    val query = URLEncoder.encode(searchTerm, "UTF-8")
+    return "https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=$query&prop=pageimages&pithumbsize=800&format=json"
+}
+
+suspend fun fetchVesselPhoto(
+    searchTerm: String,
+    imo: String = "",
+    shipName: String = ""
+): String? = withContext(Dispatchers.IO) {
+    val cacheKey = "SEARCH_$searchTerm"
     vesselPhotoCache[cacheKey]?.let { return@withContext it }
 
     val client = OkHttpClient()
 
-    if (imo.isNotBlank() && imo != "N/A" && imo.length >= 7) {
-        val imoQuery = URLEncoder.encode("IMO $imo ship", "UTF-8")
-        val imoUrl = "https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=$imoQuery&prop=pageimages&pithumbsize=800&format=json"
-        val photo = queryWikipediaApi(client, imoUrl)
+    if (searchTerm.isNotBlank()) {
+        val url = getWikimediaImageUrl(searchTerm)
+        val photo = queryWikipediaApi(client, url)
+        if (photo != null) {
+            vesselPhotoCache[cacheKey] = photo
+            return@withContext photo
+        }
+
+        if (!searchTerm.lowercase().contains("ship")) {
+            val photoWithShip = queryWikipediaApi(client, getWikimediaImageUrl("$searchTerm ship"))
+            if (photoWithShip != null) {
+                vesselPhotoCache[cacheKey] = photoWithShip
+                return@withContext photoWithShip
+            }
+        }
+    }
+
+    if (imo.isNotBlank() && imo != "N/A" && imo != "-") {
+        val photo = queryWikipediaApi(client, getWikimediaImageUrl("IMO $imo ship"))
         if (photo != null) {
             vesselPhotoCache[cacheKey] = photo
             return@withContext photo
         }
     }
 
-    if (shipName.isNotBlank()) {
-        val nameQuery = URLEncoder.encode("$shipName ship", "UTF-8")
-        val nameUrl = "https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=$nameQuery&prop=pageimages&pithumbsize=800&format=json"
-        val photo = queryWikipediaApi(client, nameUrl)
+    if (shipName.isNotBlank() && shipName != searchTerm) {
+        val photo = queryWikipediaApi(client, getWikimediaImageUrl("$shipName ship"))
         if (photo != null) {
             vesselPhotoCache[cacheKey] = photo
             return@withContext photo
@@ -1655,6 +1683,12 @@ suspend fun fetchVesselPhoto(imo: String, shipName: String): String? = withConte
     }
 
     return@withContext null
+}
+
+suspend fun fetchVesselPhoto(imo: String, shipName: String): String? {
+    val imoNum = imo.toLongOrNull() ?: 0L
+    if (imoNum <= 0L) return null
+    return fetchVesselPhoto(searchTerm = "IMO $imo", imo = imo, shipName = shipName)
 }
 
 private fun queryWikipediaApi(client: OkHttpClient, url: String): String? {
