@@ -3,18 +3,28 @@ package com.example.shiptracker
 import com.example.shiptracker.data.AisStreamMessage
 import com.example.shiptracker.data.ShipRepository
 import com.example.shiptracker.data.ShipState
+import com.example.shiptracker.ui.getMatchedDestination
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
+import kotlinx.serialization.json.Json
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
+import okio.ByteString
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ShipRepositoryTest {
@@ -94,5 +104,23 @@ class ShipRepositoryTest {
 
         assertEquals(30.002, message.metaData?.effectiveLatitude ?: 0.0, 0.0001)
         assertEquals(32.583, message.metaData?.effectiveLongitude ?: 0.0, 0.0001)
+    }
+
+    @Test
+    fun testMatchedDestinationDoesNotDefaultToHull() {
+        val dest1 = getMatchedDestination("NLRTM")
+        assertEquals("Rotterdam, NETHERLANDS", dest1)
+
+        val dest2 = getMatchedDestination("GBLON")
+        assertEquals("London, UNITED KINGDOM", dest2)
+
+        val destUnknown = getMatchedDestination("UNKNOWN")
+        assertEquals("-", destUnknown)
+
+        val destEmpty = getMatchedDestination("")
+        assertEquals("-", destEmpty)
+
+        val destHull = getMatchedDestination("GBHUL")
+        assertEquals("Hull, UNITED KINGDOM", destHull)
     }
 }

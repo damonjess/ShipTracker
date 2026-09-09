@@ -2,6 +2,7 @@ package com.example.shiptracker.data
 
 import android.util.Log
 import com.example.shiptracker.BuildConfig
+import com.example.shiptracker.util.MarkerIconGenerator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -18,6 +19,7 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
+import java.util.Locale
 
 object ShipRepository {
     private const val TAG = "ShipRepository"
@@ -72,6 +74,14 @@ object ShipRepository {
 
     fun initialize(dao: VesselDao) {
         vesselDao = dao
+        purgeOldTrackPoints()
+    }
+
+    private fun purgeOldTrackPoints() {
+        scope.launch {
+            val fortyEightHoursAgo = System.currentTimeMillis() - (48 * 60 * 60 * 1000L)
+            vesselDao?.deleteOldPoints(fortyEightHoursAgo)
+        }
     }
 
     fun updateShip(ship: ShipState) {
@@ -113,6 +123,8 @@ object ShipRepository {
     }
 
     fun startTracking(apiKey: String? = null): Boolean {
+        purgeOldTrackPoints()
+
         val resolvedApiKey = resolveApiKey(apiKey)
         if (resolvedApiKey == null) {
             Log.w(TAG, "No AISStream API key configured. Live vessel tracking is disabled until a real key is added.")
@@ -130,20 +142,18 @@ object ShipRepository {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 Log.d(TAG, "WebSocket connected")
 
-                // Track when we sent the first subscription
                 lastSubscriptionTime = System.currentTimeMillis()
 
                 val subscription = """
                     {
                         "APIKey": "$currentApiKey",
-                        "BoundingBoxes": [[[-90.0, -180.0], [90.0, 180.0]]],
-                        "FilterMessageTypes": ["PositionReport", "ShipStaticData"]
+                        "BoundingBoxes": [[[35.0, -25.0], [70.0, 35.0]]],
+                        "FilterMessageTypes": ["PositionReport", "ShipStaticData", "StandardClassBPositionReport", "ExtendedClassBPositionReport"]
                     }
                 """.trimIndent()
                 webSocket.send(subscription)
             }
 
-            // 🚨 FIX 1: Catch the binary frames and convert them to text
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
                 onMessage(webSocket, bytes.utf8())
             }
@@ -162,59 +172,84 @@ object ShipRepository {
                     _ships.update { currentMap ->
                         val existingShip = currentMap[mmsi] ?: ShipState(
                             mmsi = mmsi,
-                            latitude = if (metaLat != 0.0) metaLat else 53.65,
-                            longitude = if (metaLng != 0.0) metaLng else 0.05
+                            latitude = metaLat,
+                            longitude = metaLng,
+                            name = metaData.shipName.trim()
                         )
 
-                        val updatedShip = when (envelope.messageType) {
-                            "PositionReport" -> {
-                                val pr = envelope.message?.positionReport
-                                val prLat = pr?.latitude
-                                val prLng = pr?.longitude
+                        val pr = envelope.message?.effectivePositionReport
+                        val prLat = pr?.latitude
+                        val prLng = pr?.longitude
 
-                                val reportLat = if (prLat != null && prLat != 0.0) prLat else metaLat
-                                val reportLng = if (prLng != null && prLng != 0.0) prLng else metaLng
+                        val reportLat = if (prLat != null && prLat != 0.0) prLat else metaLat
+                        val reportLng = if (prLng != null && prLng != 0.0) prLng else metaLng
 
-                                val finalLat = if (reportLat != 0.0) reportLat else existingShip.latitude
-                                val finalLng = if (reportLng != 0.0) reportLng else existingShip.longitude
+                        val finalLat = if (reportLat != 0.0) reportLat else existingShip.latitude
+                        val finalLng = if (reportLng != 0.0) reportLng else existingShip.longitude
 
-                                val rotationAngle = if (pr != null && pr.trueHeading != 511) {
-                                    pr.trueHeading.toFloat()
-                                } else {
-                                    pr?.cog ?: existingShip.heading
-                                }
-
-                                if (finalLat != 0.0 && finalLng != 0.0) {
-                                    handlePositionReport(mmsi, finalLat, finalLng)
-                                }
-
-                                existingShip.copy(
-                                    latitude = finalLat,
-                                    longitude = finalLng,
-                                    name = metaData.shipName.ifEmpty { existingShip.name },
-                                    heading = rotationAngle,
-                                    speed = pr?.sog ?: existingShip.speed,
-                                    navStatus = pr?.navStatus ?: existingShip.navStatus,
-                                    lastSeenMillis = System.currentTimeMillis()
-                                )
-                            }
-                            "ShipStaticData" -> {
-                                val staticData = envelope.message?.shipStaticData
-                                val length = if (staticData?.dimension != null) {
-                                    staticData.dimension.toBow + staticData.dimension.toStern
-                                } else existingShip.length
-
-                                existingShip.copy(
-                                    name = staticData?.name?.trim()?.ifEmpty { existingShip.name } ?: existingShip.name,
-                                    shipType = if ((staticData?.type ?: 0) != 0) staticData!!.type else existingShip.shipType,
-                                    length = length,
-                                    destination = staticData?.destination?.trim()?.ifEmpty { existingShip.destination } ?: existingShip.destination,
-                                    draught = staticData?.draught ?: existingShip.draught,
-                                    lastSeenMillis = System.currentTimeMillis()
-                                )
-                            }
-                            else -> existingShip.copy(lastSeenMillis = System.currentTimeMillis())
+                        val rotationAngle = if (pr != null && pr.trueHeading != 511) {
+                            pr.trueHeading.toFloat()
+                        } else if (pr?.cog != null && pr.cog != 0f) {
+                            pr.cog
+                        } else {
+                            existingShip.heading
                         }
+
+                        if (finalLat != 0.0 && finalLng != 0.0) {
+                            handlePositionReport(mmsi, finalLat, finalLng)
+                        }
+
+                        val updatedName = metaData.shipName.trim().ifEmpty { existingShip.name }
+                        val inferredType = if (existingShip.shipType == 0 && updatedName.isNotEmpty()) {
+                            MarkerIconGenerator.inferShipTypeFromName(updatedName)
+                        } else existingShip.shipType
+
+                        val staticData = envelope.message?.shipStaticData
+                        val staticName = staticData?.name?.trim()?.ifEmpty { updatedName } ?: updatedName
+                        val rawType = staticData?.type ?: 0
+                        val staticInferredType = if (rawType != 0) rawType else MarkerIconGenerator.inferShipTypeFromName(staticName)
+                        val finalType = if (staticInferredType != 0) staticInferredType else inferredType
+
+                        val length = if (staticData?.dimension != null) {
+                            staticData.dimension.toBow + staticData.dimension.toStern
+                        } else existingShip.length
+
+                        val width = if (staticData?.dimension != null) {
+                            staticData.dimension.toPort + staticData.dimension.toStarboard
+                        } else existingShip.width
+
+                        val imo = if (staticData?.imoNumber != null && staticData.imoNumber > 0L) {
+                            staticData.imoNumber
+                        } else existingShip.imo
+
+                        val callSign = staticData?.callSign?.trim()?.ifEmpty { existingShip.callSign } ?: existingShip.callSign
+
+                        val etaString = if (staticData?.eta != null && staticData.eta.month > 0) {
+                            String.format(Locale.US, "2026-%02d-%02d %02d:%02d (UTC)", staticData.eta.month, staticData.eta.day, staticData.eta.hour, staticData.eta.minute)
+                        } else existingShip.eta
+
+                        val transponderClass = if (envelope.message?.isClassB == true) "Class B" else existingShip.transponderClass
+
+                        val updatedShip = existingShip.copy(
+                            latitude = finalLat,
+                            longitude = finalLng,
+                            name = staticName,
+                            shipType = finalType,
+                            length = length,
+                            width = width,
+                            heading = rotationAngle,
+                            cog = pr?.cog ?: existingShip.cog,
+                            speed = pr?.sog ?: existingShip.speed,
+                            destination = staticData?.destination?.trim()?.ifEmpty { existingShip.destination } ?: existingShip.destination,
+                            draught = if (staticData?.draught != null && staticData.draught > 0f) staticData.draught else existingShip.draught,
+                            navStatus = pr?.navStatus ?: existingShip.navStatus,
+                            imo = imo,
+                            callSign = callSign,
+                            rot = if (pr?.rateOfTurn != null && pr.rateOfTurn != -128) pr.rateOfTurn else existingShip.rot,
+                            eta = etaString,
+                            transponderClass = transponderClass,
+                            lastSeenMillis = System.currentTimeMillis()
+                        )
 
                         currentMap + (mmsi to updatedShip)
                     }
@@ -232,42 +267,75 @@ object ShipRepository {
 
                 Log.w(
                     TAG,
-                    "Live AIS stream failed. HTTP=${status} message=${message} body=${body ?: "n/a"} cause=${t.message}. No mock vessel data will be injected."
+                    "Live AIS stream failed. HTTP=${status} message=${message} body=${body ?: "n/a"} cause=${t.message}. Reconnecting in 3s..."
                 )
                 this@ShipRepository.webSocket = null
+                scheduleReconnect()
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                Log.d(TAG, "WebSocket closed: $reason")
+                Log.d(TAG, "WebSocket closed: $reason. Reconnecting in 3s...")
                 this@ShipRepository.webSocket = null
+                scheduleReconnect()
             }
         })
 
         return true
     }
 
-    fun updateBoundingBox(north: Double, south: Double, east: Double, west: Double) {
-        if (currentApiKey.isBlank()) {
-            return
-        }
+    private var reconnectJob: Job? = null
 
-        // 🚨 FIX 2: Enforce a hard 1.5-second gap between updates
-        val now = System.currentTimeMillis()
-        if (now - lastSubscriptionTime < 1500) {
-            Log.w(TAG, "Throttling bounding box update to prevent AISStream disconnect")
-            return 
-        }
-        lastSubscriptionTime = now
-
-        val subscription = """
-            {
-                "APIKey": "$currentApiKey",
-                "BoundingBoxes": [[[$south, $west], [$north, $east]]],
-                "FilterMessageTypes": ["PositionReport", "ShipStaticData"]
+    private fun scheduleReconnect() {
+        if (reconnectJob?.isActive == true || currentApiKey.isBlank()) return
+        reconnectJob = scope.launch {
+            delay(3000L)
+            if (webSocket == null && currentApiKey.isNotBlank()) {
+                Log.d(TAG, "Attempting WebSocket reconnect...")
+                startTracking(currentApiKey)
             }
-        """.trimIndent()
+        }
+    }
 
-        webSocket?.send(subscription)
+    private var pendingBoundingBoxJob: Job? = null
+
+    fun updateBoundingBox(north: Double, south: Double, east: Double, west: Double) {
+        if (currentApiKey.isBlank()) return
+        if (north == south || Math.abs(north - south) < 0.001) return
+
+        if (webSocket == null) {
+            startTracking(currentApiKey)
+        }
+
+        // Pad to ensure wide regional coverage (at least 20 deg lat x 30 deg lon)
+        val latSpan = Math.max(Math.abs(north - south) * 2.0, 10.0)
+        val lngSpan = Math.max(Math.abs(east - west) * 2.0, 15.0)
+        val midLat = (north + south) / 2.0
+        val midLng = (east + west) / 2.0
+
+        val paddedSouth = Math.max(-90.0, midLat - latSpan)
+        val paddedNorth = Math.min(90.0, midLat + latSpan)
+        val paddedWest = Math.max(-180.0, midLng - lngSpan)
+        val paddedEast = Math.min(180.0, midLng + lngSpan)
+
+        pendingBoundingBoxJob?.cancel()
+        pendingBoundingBoxJob = scope.launch {
+            val now = System.currentTimeMillis()
+            val timeSinceLast = now - lastSubscriptionTime
+            if (timeSinceLast < 1500) {
+                delay(1500 - timeSinceLast)
+            }
+            lastSubscriptionTime = System.currentTimeMillis()
+
+            val subscription = """
+                {
+                    "APIKey": "$currentApiKey",
+                    "BoundingBoxes": [[[$paddedSouth, $paddedWest], [$paddedNorth, $paddedEast]]],
+                    "FilterMessageTypes": ["PositionReport", "ShipStaticData", "StandardClassBPositionReport", "ExtendedClassBPositionReport"]
+                }
+            """.trimIndent()
+
+            webSocket?.send(subscription)
+        }
     }
 
     fun stopTracking() {

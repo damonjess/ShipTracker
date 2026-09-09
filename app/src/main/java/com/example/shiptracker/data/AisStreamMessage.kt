@@ -12,13 +12,19 @@ data class ShipState(
     val longitude: Double,
     val name: String = "Unknown",
     val shipType: Int = 0, // AIS sends types as integer codes (e.g., 70 = Cargo)
-    val length: Int = 0, // Calculated from dimensions
-    val heading: Float = 0f,
-    // NEW FIELDS
+    val length: Int = 0, // Calculated from dimensions A + B
+    val width: Int = 0, // Calculated from dimensions C + D
+    val heading: Float = 0f, // True Heading
+    val cog: Float = 0f, // Course Over Ground
     val speed: Float = 0f,
     val destination: String = "UNKNOWN",
     val draught: Float = 0f,
     val navStatus: Int = 15, // 15 means 'Undefined' in AIS protocol
+    val imo: Long = 0L,
+    val callSign: String = "",
+    val rot: Int = -128, // Rate of turn
+    val eta: String = "",
+    val transponderClass: String = "Class A",
     val lastSeenMillis: Long = System.currentTimeMillis()
 ) : ClusterItem {
     // Required overrides for the Clustering engine
@@ -58,8 +64,16 @@ data class AisMetaData(
 @Serializable
 data class AisMessagePayload(
     @SerialName("ShipStaticData") val shipStaticData: ShipStaticData? = null,
-    @SerialName("PositionReport") val positionReport: PositionReport? = null
-)
+    @SerialName("PositionReport") val positionReport: PositionReport? = null,
+    @SerialName("StandardClassBPositionReport") val standardClassBPositionReport: PositionReport? = null,
+    @SerialName("ExtendedClassBPositionReport") val extendedClassBPositionReport: PositionReport? = null
+) {
+    val effectivePositionReport: PositionReport?
+        get() = positionReport ?: standardClassBPositionReport ?: extendedClassBPositionReport
+
+    val isClassB: Boolean
+        get() = standardClassBPositionReport != null || extendedClassBPositionReport != null
+}
 
 @Serializable
 data class PositionReport(
@@ -67,6 +81,7 @@ data class PositionReport(
     @SerialName("Sog") val sog: Float = 0f, // Speed Over Ground
     @SerialName("TrueHeading") val trueHeading: Int = 511,
     @SerialName("NavigationalStatus") val navStatus: Int = 15,
+    @SerialName("RateOfTurn") val rateOfTurn: Int = -128,
     @SerialName("Latitude") val latitude: Double? = null,
     @SerialName("Longitude") val longitude: Double? = null
 )
@@ -75,9 +90,20 @@ data class PositionReport(
 data class ShipStaticData(
     @SerialName("Name") val name: String = "",
     @SerialName("Type") val type: Int = 0,
+    @SerialName("ImoNumber") val imoNumber: Long = 0L,
+    @SerialName("CallSign") val callSign: String = "",
     @SerialName("Dimension") val dimension: ShipDimension? = null,
     @SerialName("Destination") val destination: String = "",
-    @SerialName("MaximumStaticDraught") val draught: Float = 0f
+    @SerialName("MaximumStaticDraught") val draught: Float = 0f,
+    @SerialName("Eta") val eta: AisEta? = null
+)
+
+@Serializable
+data class AisEta(
+    @SerialName("Month") val month: Int = 0,
+    @SerialName("Day") val day: Int = 0,
+    @SerialName("Hour") val hour: Int = 0,
+    @SerialName("Minute") val minute: Int = 0
 )
 
 @Serializable
