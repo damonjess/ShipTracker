@@ -6,6 +6,7 @@ import com.example.shiptracker.data.ShipState
 import com.example.shiptracker.data.VesselDao
 import com.example.shiptracker.data.VesselTrackPoint
 import com.example.shiptracker.ui.ShipViewModel
+import com.example.shiptracker.ui.getVesselPhotoSearchTerms
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -107,6 +108,16 @@ class ShipViewModelTest {
         assertEquals(2, track.size)
         assertEquals(53.74, track[0].latitude, 0.001)
         assertEquals(-0.28, track[0].longitude, 0.001)
+    }
+
+    @Test
+    fun testPhotoSearchTermsIncludeShipNameWhenImoMissing() {
+        val terms = getVesselPhotoSearchTerms(
+            imo = "-",
+            shipName = "North Sea Freighter"
+        )
+
+        assertEquals(listOf("North Sea Freighter", "North Sea Freighter ship"), terms)
     }
 
     private class FakeVesselDao : VesselDao {

@@ -1160,28 +1160,25 @@ fun VesselDetailsPanel(
                         }
                     }
 
-                    // 🚨 FIX: Only ask the internet for a photo if it is a commercial ship with an IMO
                     val imoNum = vessel.imo.toLongOrNull() ?: 0L
-                    var photoUrl by remember(vessel.mmsi, vessel.imo) { mutableStateOf<String?>(null) }
+                    var photoUrl by remember(vessel.mmsi, vessel.imo, vessel.name) { mutableStateOf<String?>(null) }
 
-                    LaunchedEffect(vessel.mmsi, vessel.imo) {
-                        if (imoNum > 0L) {
-                            photoUrl = fetchVesselPhoto("IMO ${vessel.imo}", vessel.imo, vessel.name)
-                        } else {
-                            photoUrl = null
-                        }
+                    LaunchedEffect(vessel.mmsi, vessel.imo, vessel.name) {
+                        photoUrl = fetchVesselPhoto(
+                            searchTerm = if (imoNum > 0L) "IMO ${vessel.imo}" else vessel.name,
+                            imo = vessel.imo,
+                            shipName = vessel.name
+                        )
                     }
 
-                    val imageRequest = remember(vessel.mmsi, vessel.imo, photoUrl) {
-                        if (imoNum > 0L && photoUrl != null) {
+                    val imageRequest = remember(vessel.mmsi, vessel.imo, vessel.name, photoUrl) {
+                        if (photoUrl != null) {
                             ImageRequest.Builder(context)
                                 .data(photoUrl)
                                 .addHeader("User-Agent", "ShipTrackerApp/1.0 (Android; VesselTracker)")
                                 .crossfade(true)
                                 .build()
                         } else {
-                            // It's a small Class B boat. Return null so Coil skips the network 
-                            // request and gracefully reveals the blue silhouette underneath.
                             null
                         }
                     }
@@ -1634,6 +1631,26 @@ fun getDefaultVesselPhotoUrl(type: String): String {
 
 private val vesselPhotoCache = ConcurrentHashMap<String, String>()
 
+fun getVesselPhotoSearchTerms(imo: String, shipName: String): List<String> {
+    val cleanedName = shipName.trim()
+    val uniqueTerms = linkedSetOf<String>()
+
+    if (imo.isNotBlank() && imo != "N/A" && imo != "-") {
+        uniqueTerms += "IMO $imo"
+    }
+
+    if (cleanedName.isNotBlank()) {
+        uniqueTerms += cleanedName
+        uniqueTerms += "$cleanedName ship"
+    }
+
+    if (imo.isNotBlank() && imo != "N/A" && imo != "-") {
+        uniqueTerms += "IMO $imo ship"
+    }
+
+    return uniqueTerms.toList()
+}
+
 fun getWikimediaImageUrl(searchTerm: String): String {
     val query = URLEncoder.encode(searchTerm, "UTF-8")
     return "https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=$query&prop=pageimages&pithumbsize=800&format=json"
@@ -1644,41 +1661,29 @@ suspend fun fetchVesselPhoto(
     imo: String = "",
     shipName: String = ""
 ): String? = withContext(Dispatchers.IO) {
-    val cacheKey = "SEARCH_$searchTerm"
-    vesselPhotoCache[cacheKey]?.let { return@withContext it }
+    val searchTerms = if (searchTerm.isNotBlank()) {
+        listOf(searchTerm) + getVesselPhotoSearchTerms(imo, shipName).filter { it != searchTerm }
+    } else {
+        getVesselPhotoSearchTerms(imo, shipName)
+    }
 
     val client = OkHttpClient()
 
-    if (searchTerm.isNotBlank()) {
-        val url = getWikimediaImageUrl(searchTerm)
-        val photo = queryWikipediaApi(client, url)
+    for (term in searchTerms) {
+        val cacheKey = "SEARCH_$term"
+        vesselPhotoCache[cacheKey]?.let { return@withContext it }
+
+        val photo = queryWikipediaApi(client, getWikimediaImageUrl(term))
         if (photo != null) {
             vesselPhotoCache[cacheKey] = photo
             return@withContext photo
         }
 
-        if (!searchTerm.lowercase().contains("ship")) {
-            val photoWithShip = queryWikipediaApi(client, getWikimediaImageUrl("$searchTerm ship"))
-            if (photoWithShip != null) {
-                vesselPhotoCache[cacheKey] = photoWithShip
-                return@withContext photoWithShip
-            }
-        }
-    }
-
-    if (imo.isNotBlank() && imo != "N/A" && imo != "-") {
-        val photo = queryWikipediaApi(client, getWikimediaImageUrl("IMO $imo ship"))
-        if (photo != null) {
-            vesselPhotoCache[cacheKey] = photo
-            return@withContext photo
-        }
-    }
-
-    if (shipName.isNotBlank() && shipName != searchTerm) {
-        val photo = queryWikipediaApi(client, getWikimediaImageUrl("$shipName ship"))
-        if (photo != null) {
-            vesselPhotoCache[cacheKey] = photo
-            return@withContext photo
+        if (term.lowercase().contains("ship")) continue
+        val photoWithShip = queryWikipediaApi(client, getWikimediaImageUrl("$term ship"))
+        if (photoWithShip != null) {
+            vesselPhotoCache["SEARCH_${term} ship"] = photoWithShip
+            return@withContext photoWithShip
         }
     }
 
