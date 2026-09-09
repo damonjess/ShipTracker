@@ -223,6 +223,23 @@ object ShipRepository {
 
     private fun handlePositionReport(mmsi: Long, lat: Double, lng: Double) {
         if (mmsi == 0L || lat == 0.0 || lng == 0.0) return
+
+        // 🚨 FIX 2: S-AIS OPTIMIZATION
+        // Only save historical wake trails to the hard drive if the ship is near 
+        // the user's current camera view (we add a 5-degree safety buffer). 
+        // This stops SQLite from processing thousands of background writes per minute.
+        val latBuffer = 5.0
+        val lngBuffer = 5.0
+
+        val minLat = minOf(lastSouth, lastNorth) - latBuffer
+        val maxLat = maxOf(lastSouth, lastNorth) + latBuffer
+        val minLng = minOf(lastWest, lastEast) - lngBuffer
+        val maxLng = maxOf(lastWest, lastEast) + lngBuffer
+
+        if (lat !in minLat..maxLat || lng !in minLng..maxLng) {
+            return // Silently drop the history point to save CPU/Disk IO
+        }
+
         scope.launch {
             vesselDao?.insertPoint(
                 VesselTrackPoint(
