@@ -35,6 +35,34 @@ class ShipViewModel(
         repository.startTracking()
     }
 
+    // 🚨 NEW: StateFlow for the UI Switch
+    private val _isSatelliteMode = MutableStateFlow(repository.isSatelliteAisMode.value)
+    val isSatelliteMode: StateFlow<Boolean> = _isSatelliteMode.asStateFlow()
+
+    fun toggleSatelliteMode(enabled: Boolean) {
+        _isSatelliteMode.value = enabled
+        repository.setSatelliteMode(enabled)
+    }
+
+    val isSatelliteAisMode: StateFlow<Boolean> = repository.isSatelliteAisMode
+
+    fun toggleSatelliteAisMode() {
+        val nextState = !_isSatelliteMode.value
+        toggleSatelliteMode(nextState)
+    }
+
+    val satelliteVesselsCount: StateFlow<Int> = repository.ships
+        .map { map -> map.values.count { it.isSatelliteAis } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
+    val terrestrialVesselsCount: StateFlow<Int> = repository.ships
+        .map { map -> map.values.count { !it.isSatelliteAis } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
+    val deepSeaVesselsCount: StateFlow<Int> = repository.ships
+        .map { map -> map.values.count { it.distanceFromShoreNm > 18.0 } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
     // 1. State for active UI filters
     private val _selectedFilters = MutableStateFlow<Set<ShipCategory>>(emptySet())
     val selectedFilters: StateFlow<Set<ShipCategory>> = _selectedFilters.asStateFlow()
@@ -164,6 +192,9 @@ class ShipViewModel(
     // 3. Selected vessel MMSI for track retrieval
     val selectedMmsi = MutableStateFlow<Long?>(null)
 
+    // 🚨 NEW: Track which vessel the camera is locked onto
+    val followedMmsi = MutableStateFlow<Long?>(null)
+
     // Automatically queries Room and converts points into Google Maps LatLng coordinates
     @OptIn(ExperimentalCoroutinesApi::class)
     val activeTrackPoints: StateFlow<List<LatLng>> = selectedMmsi
@@ -185,6 +216,22 @@ class ShipViewModel(
 
     fun clearSelection() {
         selectedMmsi.value = null
+        followedMmsi.value = null // Stop following if we close the sheet
+    }
+
+    // 🚨 NEW: Toggle the follow state
+    fun toggleFollow(mmsi: Long) {
+        if (followedMmsi.value == mmsi) {
+            followedMmsi.value = null
+        } else {
+            followedMmsi.value = mmsi
+            selectedMmsi.value = mmsi // Ensure it's selected so the wake trail draws
+        }
+    }
+
+    // 🚨 NEW: Break the lock when the user touches the map
+    fun stopFollowing() {
+        followedMmsi.value = null
     }
 
     // 4. Toggle function for the UI filters

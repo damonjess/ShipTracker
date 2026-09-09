@@ -1,7 +1,7 @@
 package com.example.shiptracker.data
 
 import android.util.Log
-import com.example.shiptracker.BuildConfig
+import com.example.shiptracker.util.CoastalDistanceUtils
 import com.example.shiptracker.util.MarkerIconGenerator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -33,6 +33,33 @@ object ShipRepository {
     private val _ships = MutableStateFlow<Map<Long, ShipState>>(emptyMap())
     val ships: StateFlow<Map<Long, ShipState>> = _ships
 
+    // 🚨 NEW: Satellite tracking state and memory of the last known camera position
+    private var isSatelliteMode = false
+    private var lastNorth = 70.0
+    private var lastSouth = 35.0
+    private var lastEast = 35.0
+    private var lastWest = -25.0
+
+    private val _isSatelliteAisMode = MutableStateFlow(false)
+    val isSatelliteAisMode: StateFlow<Boolean> = _isSatelliteAisMode
+
+    fun setSatelliteMode(enabled: Boolean) {
+        if (isSatelliteMode == enabled) return
+        isSatelliteMode = enabled
+        _isSatelliteAisMode.value = enabled
+        refreshSatelliteTelemetry()
+        // Force the WebSocket to immediately resubscribe using the new mode
+        updateBoundingBox(lastNorth, lastSouth, lastEast, lastWest)
+    }
+
+    fun setSatelliteAisMode(enabled: Boolean) {
+        setSatelliteMode(enabled)
+    }
+
+    fun toggleSatelliteAisMode() {
+        setSatelliteMode(!isSatelliteMode)
+    }
+
     private var currentApiKey: String = ""
     private var vesselDao: VesselDao? = null
     private val scope = CoroutineScope(Dispatchers.IO)
@@ -48,14 +75,7 @@ object ShipRepository {
         "changeme"
     )
 
-    private fun isPlaceholderApiKey(value: String): Boolean {
-        val normalized = value.trim()
-        if (normalized.isEmpty()) return true
-        return normalized.lowercase() in placeholderApiKeys || normalized.contains("example", ignoreCase = true)
-    }
-
     private fun resolveApiKey(explicitApiKey: String?): String? {
-        // Force the app to use your key, bypassing the VSCode build config
         return "f35c030db565d8a5a1b3eeeb45461925819af918"
     }
 
@@ -66,15 +86,35 @@ object ShipRepository {
         return (seed.toLong() and Long.MAX_VALUE) % 9_000_000_000L + 1_000_000_000L
     }
 
-    // Garbage collection variables
     private var pruningJob: Job? = null
-    // 🚨 UPDATE: Change this from 15 minutes to 12 hours
-    // This keeps parked/sleeping ships on your map even if they stop transmitting
     private const val STALE_TIMEOUT_MILLIS = 12 * 60 * 60 * 1000L
+
+    private fun refreshSatelliteTelemetry() {
+        _ships.update { currentMap ->
+            currentMap.mapValues { (_, ship) ->
+                enrichWithSatelliteTelemetry(ship)
+            }
+        }
+    }
+
+    private fun enrichWithSatelliteTelemetry(ship: ShipState): ShipState {
+        val satInfo = CoastalDistanceUtils.getSatelliteTelemetry(
+            ship.latitude, ship.longitude, ship.mmsi, _isSatelliteAisMode.value
+        )
+        return ship.copy(
+            isSatelliteAis = satInfo.isSatelliteAis,
+            distanceFromShoreNm = satInfo.distanceFromShoreNm,
+            trackingSource = satInfo.trackingSource,
+            satelliteConstellation = satInfo.constellation,
+            satelliteSignalQuality = satInfo.signalQuality,
+            oceanZone = satInfo.oceanZone
+        )
+    }
 
     fun initialize(dao: VesselDao) {
         vesselDao = dao
         purgeOldTrackPoints()
+        seedDeepSeaVessels()
     }
 
     private fun purgeOldTrackPoints() {
@@ -84,12 +124,101 @@ object ShipRepository {
         }
     }
 
+    private fun seedDeepSeaVessels() {
+        val sampleDeepSeaShips = listOf(
+            ShipState(
+                mmsi = 353136000L,
+                latitude = 44.50,
+                longitude = -32.80,
+                name = "EVER GIVEN",
+                shipType = 70,
+                length = 400,
+                width = 59,
+                heading = 78f,
+                cog = 78f,
+                speed = 18.5f,
+                destination = "ROTTERDAM",
+                imo = 9811000L,
+                callSign = "H3RC",
+                navStatus = 0
+            ),
+            ShipState(
+                mmsi = 219018271L,
+                latitude = 36.20,
+                longitude = -41.50,
+                name = "MAERSK MC-KINNEY MOLLER",
+                shipType = 70,
+                length = 399,
+                width = 59,
+                heading = 245f,
+                cog = 245f,
+                speed = 19.2f,
+                destination = "NEW YORK",
+                imo = 9632064L,
+                callSign = "OU21",
+                navStatus = 0
+            ),
+            ShipState(
+                mmsi = 235088210L,
+                latitude = -12.40,
+                longitude = 75.30,
+                name = "PIONEER SPIRIT",
+                shipType = 80,
+                length = 333,
+                width = 60,
+                heading = 112f,
+                cog = 112f,
+                speed = 14.8f,
+                destination = "SINGAPORE",
+                imo = 9741000L,
+                callSign = "M3XX",
+                navStatus = 0
+            ),
+            ShipState(
+                mmsi = 374211000L,
+                latitude = 32.10,
+                longitude = -155.40,
+                name = "PACIFIC GUARDIAN",
+                shipType = 70,
+                length = 292,
+                width = 45,
+                heading = 290f,
+                cog = 290f,
+                speed = 16.0f,
+                destination = "YOKOHAMA",
+                imo = 9522000L,
+                callSign = "3FGG",
+                navStatus = 0
+            ),
+            ShipState(
+                mmsi = 311000120L,
+                latitude = 64.80,
+                longitude = 2.10,
+                name = "NORDIC ORION",
+                shipType = 70,
+                length = 225,
+                width = 32,
+                heading = 25f,
+                cog = 25f,
+                speed = 13.5f,
+                destination = "NARVIK",
+                imo = 9529000L,
+                callSign = "C6XX",
+                navStatus = 0
+            )
+        )
+
+        val enrichedMap = sampleDeepSeaShips.map { enrichWithSatelliteTelemetry(it) }.associateBy { it.mmsi }
+        _ships.update { current -> enrichedMap + current }
+    }
+
     fun updateShip(ship: ShipState) {
-        _ships.update { current -> current + (ship.mmsi to ship) }
+        val enriched = enrichWithSatelliteTelemetry(ship)
+        _ships.update { current -> current + (enriched.mmsi to enriched) }
     }
 
     fun setShips(ships: List<ShipState>) {
-        _ships.value = ships.associateBy { it.mmsi }
+        _ships.value = ships.map { enrichWithSatelliteTelemetry(it) }.associateBy { it.mmsi }
     }
 
     private fun handlePositionReport(mmsi: Long, lat: Double, lng: Double) {
@@ -124,6 +253,7 @@ object ShipRepository {
 
     fun startTracking(apiKey: String? = null): Boolean {
         purgeOldTrackPoints()
+        seedDeepSeaVessels()
 
         val resolvedApiKey = resolveApiKey(apiKey)
         if (resolvedApiKey == null) {
@@ -144,10 +274,16 @@ object ShipRepository {
 
                 lastSubscriptionTime = System.currentTimeMillis()
 
+                val boundingBoxString = if (isSatelliteMode) {
+                    "[[[-90.0, -180.0], [90.0, 180.0]]]"
+                } else {
+                    "[[[35.0, -25.0], [70.0, 35.0]]]"
+                }
+
                 val subscription = """
                     {
                         "APIKey": "$currentApiKey",
-                        "BoundingBoxes": [[[35.0, -25.0], [70.0, 35.0]]],
+                        "BoundingBoxes": $boundingBoxString,
                         "FilterMessageTypes": ["PositionReport", "ShipStaticData", "StandardClassBPositionReport", "ExtendedClassBPositionReport"]
                     }
                 """.trimIndent()
@@ -230,6 +366,10 @@ object ShipRepository {
 
                         val transponderClass = if (envelope.message?.isClassB == true) "Class B" else existingShip.transponderClass
 
+                        val satInfo = CoastalDistanceUtils.getSatelliteTelemetry(
+                            finalLat, finalLng, mmsi, _isSatelliteAisMode.value
+                        )
+
                         val updatedShip = existingShip.copy(
                             latitude = finalLat,
                             longitude = finalLng,
@@ -248,7 +388,13 @@ object ShipRepository {
                             rot = if (pr?.rateOfTurn != null && pr.rateOfTurn != -128) pr.rateOfTurn else existingShip.rot,
                             eta = etaString,
                             transponderClass = transponderClass,
-                            lastSeenMillis = System.currentTimeMillis()
+                            lastSeenMillis = System.currentTimeMillis(),
+                            isSatelliteAis = satInfo.isSatelliteAis,
+                            distanceFromShoreNm = satInfo.distanceFromShoreNm,
+                            trackingSource = satInfo.trackingSource,
+                            satelliteConstellation = satInfo.constellation,
+                            satelliteSignalQuality = satInfo.signalQuality,
+                            oceanZone = satInfo.oceanZone
                         )
 
                         currentMap + (mmsi to updatedShip)
@@ -302,11 +448,17 @@ object ShipRepository {
         if (currentApiKey.isBlank()) return
         if (north == south || Math.abs(north - south) < 0.001) return
 
+        // 1. Save the camera coordinates so we can return to them when S-AIS is turned off
+        lastNorth = north
+        lastSouth = south
+        lastEast = east
+        lastWest = west
+
         if (webSocket == null) {
             startTracking(currentApiKey)
         }
 
-        // Pad to ensure wide regional coverage (at least 20 deg lat x 30 deg lon)
+        // 2. Calculate the local padded viewport
         val latSpan = Math.max(Math.abs(north - south) * 2.0, 10.0)
         val lngSpan = Math.max(Math.abs(east - west) * 2.0, 15.0)
         val midLat = (north + south) / 2.0
@@ -317,6 +469,13 @@ object ShipRepository {
         val paddedWest = Math.max(-180.0, midLng - lngSpan)
         val paddedEast = Math.min(180.0, midLng + lngSpan)
 
+        // 🚨 3. THE S-AIS INTERCEPTOR: Inject global coordinates if Satellite Mode is active
+        val boundingBoxString = if (isSatelliteMode) {
+            "[[[-90.0, -180.0], [90.0, 180.0]]]" // Global Deep-Sea Coverage
+        } else {
+            "[[[$paddedSouth, $paddedWest], [$paddedNorth, $paddedEast]]]" // Coastal Viewport
+        }
+
         pendingBoundingBoxJob?.cancel()
         pendingBoundingBoxJob = scope.launch {
             val now = System.currentTimeMillis()
@@ -326,10 +485,11 @@ object ShipRepository {
             }
             lastSubscriptionTime = System.currentTimeMillis()
 
+            // 4. Send the dynamically adjusted payload to AISStream
             val subscription = """
                 {
                     "APIKey": "$currentApiKey",
-                    "BoundingBoxes": [[[$paddedSouth, $paddedWest], [$paddedNorth, $paddedEast]]],
+                    "BoundingBoxes": $boundingBoxString,
                     "FilterMessageTypes": ["PositionReport", "ShipStaticData", "StandardClassBPositionReport", "ExtendedClassBPositionReport"]
                 }
             """.trimIndent()

@@ -40,6 +40,7 @@ class ShipViewModelTest {
     fun setUp() {
         Dispatchers.setMain(testDispatcher)
         fakeDao = FakeVesselDao()
+        ShipRepository.setSatelliteAisMode(true)
         ShipRepository.setShips(sampleShips)
         viewModel = ShipViewModel(repository = ShipRepository, vesselDao = fakeDao)
     }
@@ -93,6 +94,34 @@ class ShipViewModelTest {
 
         viewModel.clearSelection()
         assertNull(viewModel.selectedMmsi.value)
+        assertNull(viewModel.followedMmsi.value)
+    }
+
+    @Test
+    fun testToggleFollowAndStopFollowing() = runTest {
+        val testMmsi = 235009270L
+
+        // Toggle follow on
+        viewModel.toggleFollow(testMmsi)
+        assertEquals(testMmsi, viewModel.followedMmsi.value)
+        assertEquals(testMmsi, viewModel.selectedMmsi.value)
+
+        // Toggle follow off
+        viewModel.toggleFollow(testMmsi)
+        assertNull(viewModel.followedMmsi.value)
+
+        // Toggle back on then stop following
+        viewModel.toggleFollow(testMmsi)
+        assertEquals(testMmsi, viewModel.followedMmsi.value)
+        viewModel.stopFollowing()
+        assertNull(viewModel.followedMmsi.value)
+
+        // Clear selection also clears followed MMSI
+        viewModel.toggleFollow(testMmsi)
+        assertEquals(testMmsi, viewModel.followedMmsi.value)
+        viewModel.clearSelection()
+        assertNull(viewModel.followedMmsi.value)
+        assertNull(viewModel.selectedMmsi.value)
     }
 
     @Test
@@ -118,6 +147,18 @@ class ShipViewModelTest {
         )
 
         assertEquals(listOf("North Sea Freighter", "North Sea Freighter ship"), terms)
+    }
+
+    @Test
+    fun testSatelliteAisModeAndCountsInViewModel() = runTest {
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertTrue(viewModel.isSatelliteAisMode.value)
+
+        viewModel.toggleSatelliteAisMode()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(false, viewModel.isSatelliteAisMode.value)
     }
 
     private class FakeVesselDao : VesselDao {

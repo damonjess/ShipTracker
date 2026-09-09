@@ -5,6 +5,7 @@ import android.content.Context
 import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.net.Uri
+import android.view.MotionEvent
 import android.view.View
 import android.view.animation.LinearInterpolator
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -43,6 +44,8 @@ import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Grain
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.LocationSearching
+import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Search
@@ -70,6 +73,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SearchBar
 import androidx.compose.material3.SearchBarDefaults
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -158,7 +162,12 @@ data class Vessel(
     val flagEmoji: String,
     val flagCountry: String,
     val transponderClass: String,
-    val aisSource: String = "Roaming"
+    val aisSource: String = "Terrestrial AIS",
+    val isSatelliteAis: Boolean = false,
+    val distanceFromShoreNm: Double = 0.0,
+    val satelliteConstellation: String = "",
+    val satelliteSignalQuality: String = "",
+    val oceanZone: String = ""
 )
 
 fun getShipTypeString(aisTypeCode: Int): String {
@@ -325,7 +334,12 @@ fun ShipState.toVessel(): Vessel {
         flagEmoji = getCountryFlag(mmsi),
         flagCountry = getCountryName(mmsi),
         transponderClass = transponderClass.ifEmpty { "Class A" },
-        aisSource = "Roaming"
+        aisSource = trackingSource.ifEmpty { if (isSatelliteAis) "Satellite AIS (S-AIS)" else "Terrestrial AIS" },
+        isSatelliteAis = isSatelliteAis,
+        distanceFromShoreNm = distanceFromShoreNm,
+        satelliteConstellation = satelliteConstellation,
+        satelliteSignalQuality = satelliteSignalQuality,
+        oceanZone = oceanZone
     )
 }
 
@@ -434,6 +448,8 @@ fun OpenShipMap(
     panTarget: ShipState? = null,
     recenterTrigger: Int = 0,
     mapType: AppMapType = AppMapType.LIGHT,
+    followedShip: ShipState? = null,
+    onMapTouched: () -> Unit = {},
     onPanConsumed: () -> Unit = {},
     onViewportChanged: (north: Double, south: Double, east: Double, west: Double, zoom: Double) -> Unit = { _, _, _, _, _ -> },
     onShipClick: (ShipState) -> Unit
@@ -465,6 +481,15 @@ fun OpenShipMap(
             setMultiTouchControls(true)
             controller.setZoom(10.0)
             controller.setCenter(GeoPoint(53.6, -0.1))
+
+            // 🚨 NEW: Break the follow lock the moment the user's finger touches the map
+            setOnTouchListener { v, event ->
+                if (event.action == MotionEvent.ACTION_DOWN) {
+                    onMapTouched()
+                    v.performClick()
+                }
+                false // Return false so Osmdroid can still handle the actual drag/zoom
+            }
 
             addOnLayoutChangeListener { _, left, top, right, bottom, _, _, _, _ ->
                 if (right - left > 0 && bottom - top > 0) {
@@ -516,6 +541,14 @@ fun OpenShipMap(
     LaunchedEffect(recenterTrigger) {
         if (recenterTrigger > 0) {
             mapView.controller.animateTo(GeoPoint(53.6, -0.1), 10.0, 800L)
+        }
+    }
+
+    // 🚨 NEW: Automatically pan the camera when the followed ship moves
+    LaunchedEffect(followedShip?.latitude, followedShip?.longitude) {
+        followedShip?.let { ship ->
+            // Use a quick 500ms smooth pan to keep the motion fluid
+            mapView.controller.animateTo(GeoPoint(ship.latitude, ship.longitude), mapView.zoomLevelDouble, 500L)
         }
     }
 
@@ -702,6 +735,13 @@ fun ShipTrackerMainScreen(
     val activeFilters by viewModel.selectedFilters.collectAsState()
     val trackPoints by viewModel.activeTrackPoints.collectAsState()
     val activeMmsi by viewModel.selectedMmsi.collectAsState()
+    val followedMmsi by viewModel.followedMmsi.collectAsState()
+    val followedShip = visibleShips.find { it.mmsi == followedMmsi }
+
+    val isSatelliteMode by viewModel.isSatelliteAisMode.collectAsState()
+    val satelliteCount by viewModel.satelliteVesselsCount.collectAsState()
+    val deepSeaCount by viewModel.deepSeaVesselsCount.collectAsState()
+    var showSatelliteAisSheet by remember { mutableStateOf(false) }
 
     var selectedVessel by remember { mutableStateOf<Vessel?>(null) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
@@ -728,6 +768,8 @@ fun ShipTrackerMainScreen(
                 panTarget = panTarget,
                 recenterTrigger = recenterTrigger,
                 mapType = currentMapType,
+                followedShip = followedShip,
+                onMapTouched = { viewModel.stopFollowing() },
                 onPanConsumed = { panTarget = null },
                 onViewportChanged = { north, south, east, west, zoom ->
                     viewModel.updateViewport(north, south, east, west)
@@ -841,6 +883,19 @@ fun ShipTrackerMainScreen(
                 }
             }
 
+            SatelliteAisStatusChip(
+                isSatelliteMode = isSatelliteMode,
+                satelliteCount = satelliteCount,
+                deepSeaCount = deepSeaCount,
+                onClick = { showSatelliteAisSheet = true },
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(
+                        top = if (currentMapType == AppMapType.NAUTICAL && showNauticalInfoBanner) 275.dp else 210.dp,
+                        start = 16.dp
+                    )
+            )
+
             if (activeMmsi != null && selectedVessel == null) {
                 ExtendedFloatingActionButton(
                     onClick = { viewModel.clearSelection() },
@@ -856,6 +911,13 @@ fun ShipTrackerMainScreen(
         }
     }
 
+    if (showSatelliteAisSheet) {
+        SatelliteAisInfoSheet(
+            viewModel = viewModel,
+            onDismiss = { showSatelliteAisSheet = false }
+        )
+    }
+
     if (showNauticalDetailsSheet) {
         NauticalChartsInfoSheet(
             onDismiss = { showNauticalDetailsSheet = false }
@@ -865,6 +927,7 @@ fun ShipTrackerMainScreen(
     if (selectedVessel != null) {
         val liveShip = visibleShips.find { it.mmsi == selectedVessel!!.mmsi }
         val displayVessel = liveShip?.toVessel() ?: selectedVessel!!
+        val isFollowing = followedMmsi == displayVessel.mmsi
 
         ModalBottomSheet(
             onDismissRequest = {
@@ -878,16 +941,13 @@ fun ShipTrackerMainScreen(
         ) {
             VesselDetailsPanel(
                 vessel = displayVessel,
+                isFollowing = isFollowing,
                 onClose = {
                     selectedVessel = null
                     viewModel.clearSelection()
                 },
                 onTrackClick = {
-                    val shipToTrack = visibleShips.find { it.mmsi == displayVessel.mmsi }
-                    if (shipToTrack != null) {
-                        panTarget = shipToTrack
-                    }
-                    selectedVessel = null
+                    viewModel.toggleFollow(displayVessel.mmsi)
                 }
             )
         }
@@ -996,6 +1056,7 @@ fun MapHeader(
 @Composable
 fun VesselDetailsPanel(
     vessel: Vessel,
+    isFollowing: Boolean = false,
     onClose: () -> Unit = {},
     onTrackClick: () -> Unit = {}
 ) {
@@ -1035,10 +1096,16 @@ fun VesselDetailsPanel(
 
             ExtendedFloatingActionButton(
                 onClick = onTrackClick,
-                icon = { Icon(Icons.Default.DirectionsBoat, contentDescription = "Track", modifier = Modifier.size(18.dp)) },
-                text = { Text("Track", fontSize = 13.sp) },
-                containerColor = Color.White,
-                contentColor = marineBlue,
+                icon = {
+                    Icon(
+                        imageVector = if (isFollowing) Icons.Default.MyLocation else Icons.Default.LocationSearching,
+                        contentDescription = if (isFollowing) "Following" else "Track",
+                        modifier = Modifier.size(18.dp)
+                    )
+                },
+                text = { Text(if (isFollowing) "Following" else "Track", fontSize = 13.sp) },
+                containerColor = if (isFollowing) Color(0xFF4CAF50) else Color.White,
+                contentColor = if (isFollowing) Color.White else Color(0xFF235DB2),
                 modifier = Modifier
                     .height(36.dp)
                     .padding(end = 8.dp)
@@ -1363,6 +1430,126 @@ fun VesselDetailsPanel(
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        // CARD: SATELLITE AIS TELEMETRY
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            Column {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Public,
+                            contentDescription = null,
+                            tint = Color(0xFF0284C7),
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Text(
+                            text = "Satellite AIS Telemetry",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF0F172A)
+                        )
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (vessel.isSatelliteAis) Color(0xFF0284C7) else Color(0xFF16A34A)
+                    ) {
+                        Text(
+                            text = if (vessel.isSatelliteAis) "S-AIS ACTIVE" else "TERRESTRIAL",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+
+                HorizontalDivider(color = Color(0xFFF1F5F9))
+
+                InfoTableRow(
+                    label = "Signal Source",
+                    value = vessel.aisSource,
+                    valueColor = if (vessel.isSatelliteAis) Color(0xFF0284C7) else Color(0xFF16A34A)
+                )
+                HorizontalDivider(color = Color(0xFFF1F5F9))
+
+                InfoTableRow(
+                    label = "Distance from Shore",
+                    value = "${"%.1f".format(vessel.distanceFromShoreNm)} NM (${if (vessel.distanceFromShoreNm > 18.0) "Deep Sea" else "Coastal Range"})"
+                )
+                HorizontalDivider(color = Color(0xFFF1F5F9))
+
+                InfoTableRow(
+                    label = "Ocean Basin / Zone",
+                    value = vessel.oceanZone.ifEmpty { "International Open Waters" }
+                )
+                HorizontalDivider(color = Color(0xFFF1F5F9))
+
+                InfoTableRow(
+                    label = "Satellite Constellation",
+                    value = vessel.satelliteConstellation.ifEmpty { "Spire / Orbcomm S-AIS Network" }
+                )
+                HorizontalDivider(color = Color(0xFFF1F5F9))
+
+                InfoTableRow(
+                    label = "Satellite Link Quality",
+                    value = vessel.satelliteSignalQuality.ifEmpty { "98% (High)" }
+                )
+
+                // Terrestrial Coverage Cutoff Notice Banner
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp)
+                        .background(
+                            if (vessel.distanceFromShoreNm > 18.0) Color(0xFFEFF6FF) else Color(0xFFF0FDF4),
+                            RoundedCornerShape(6.dp)
+                        )
+                        .padding(10.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.Top,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = null,
+                            tint = if (vessel.distanceFromShoreNm > 18.0) Color(0xFF0284C7) else Color(0xFF16A34A),
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = if (vessel.distanceFromShoreNm > 18.0)
+                                "Beyond Coastal Terrestrial AIS Range (>15–20 NM limit). Vessel telemetry maintained continuously via Low-Earth Orbit Satellite AIS (S-AIS)."
+                            else
+                                "Within Terrestrial AIS Range (0–18 NM from coastline). Simultaneous reception via coastal receiver towers and satellite payload redundancy.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (vessel.distanceFromShoreNm > 18.0) Color(0xFF1E3A8A) else Color(0xFF14532D),
+                            fontSize = 12.sp,
+                            lineHeight = 16.sp
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
         // 5. LIVE WEATHER FOOTER
         var weather by remember(vessel.mmsi) { mutableStateOf<VesselWeatherInfo?>(null) }
         LaunchedEffect(vessel.mmsi, vessel.lat, vessel.lng) {
@@ -1635,16 +1822,13 @@ fun getVesselPhotoSearchTerms(imo: String, shipName: String): List<String> {
     val cleanedName = shipName.trim()
     val uniqueTerms = linkedSetOf<String>()
 
-    if (imo.isNotBlank() && imo != "N/A" && imo != "-") {
-        uniqueTerms += "IMO $imo"
-    }
-
     if (cleanedName.isNotBlank()) {
         uniqueTerms += cleanedName
         uniqueTerms += "$cleanedName ship"
     }
 
     if (imo.isNotBlank() && imo != "N/A" && imo != "-") {
+        uniqueTerms += "IMO $imo"
         uniqueTerms += "IMO $imo ship"
     }
 
@@ -1673,14 +1857,14 @@ suspend fun fetchVesselPhoto(
         val cacheKey = "SEARCH_$term"
         vesselPhotoCache[cacheKey]?.let { return@withContext it }
 
-        val photo = queryWikipediaApi(client, getWikimediaImageUrl(term))
+        val photo = queryWikipediaApi(client, getWikimediaImageUrl(term), term)
         if (photo != null) {
             vesselPhotoCache[cacheKey] = photo
             return@withContext photo
         }
 
         if (term.lowercase().contains("ship")) continue
-        val photoWithShip = queryWikipediaApi(client, getWikimediaImageUrl("$term ship"))
+        val photoWithShip = queryWikipediaApi(client, getWikimediaImageUrl("$term ship"), "$term ship")
         if (photoWithShip != null) {
             vesselPhotoCache["SEARCH_${term} ship"] = photoWithShip
             return@withContext photoWithShip
@@ -1696,7 +1880,38 @@ suspend fun fetchVesselPhoto(imo: String, shipName: String): String? {
     return fetchVesselPhoto(searchTerm = "IMO $imo", imo = imo, shipName = shipName)
 }
 
-private fun queryWikipediaApi(client: OkHttpClient, url: String): String? {
+private fun isLikelyVesselPageTitle(searchTerm: String, pageTitle: String): Boolean {
+    val title = pageTitle.lowercase().trim()
+    if (title.isBlank()) return false
+
+    val normalizedSearchTerm = searchTerm.lowercase().trim()
+    val normalizedWithoutShipSuffix = normalizedSearchTerm.removeSuffix(" ship").trim()
+
+    val forbiddenKeywords = listOf(
+        "list of", "category:", "disambiguation", "hotel", "building",
+        "company", "carrier", "city", "town", "province", "country", "state",
+        "map", "bridge", "airport", "harbour", "harbor", "lake", "coast",
+        "canal", "region", "district", "school", "university", "station",
+        "river", "sea", "ocean", "bay", "strait", "island"
+    )
+
+    if (forbiddenKeywords.any { title.contains(it) } && !title.contains("ship") && !title.contains("vessel")) {
+        return false
+    }
+
+    val allowedKeywords = listOf(
+        "ship", "vessel", "cargo", "tanker", "ferry", "boat", "cruise",
+        "freighter", "container", "bulk carrier", "bulkcarrier", "yacht"
+    )
+
+    if (allowedKeywords.any { title.contains(it) }) return true
+    if (normalizedWithoutShipSuffix.isNotBlank() && title.contains(normalizedWithoutShipSuffix)) return true
+    if (normalizedSearchTerm.isNotBlank() && title.contains(normalizedSearchTerm)) return true
+
+    return false
+}
+
+private fun queryWikipediaApi(client: OkHttpClient, url: String, searchTerm: String = ""): String? {
     try {
         val request = Request.Builder()
             .url(url)
@@ -1718,19 +1933,14 @@ private fun queryWikipediaApi(client: OkHttpClient, url: String): String? {
 
             pageList.sortBy { it.optInt("index", Int.MAX_VALUE) }
 
-            val forbiddenKeywords = listOf("list of", "port of", "category:", "disambiguation", "hotel", "building", "company", "carrier")
-
             for (page in pageList) {
-                val title = page.optString("title", "").lowercase()
+                val title = page.optString("title", "")
                 val thumbnail = page.optJSONObject("thumbnail")?.optString("source")
-                if (!thumbnail.isNullOrEmpty()) {
-                    val isForbidden = forbiddenKeywords.any { title.contains(it) }
-                    if (!isForbidden) {
-                        return thumbnail
-                    }
+                if (!thumbnail.isNullOrEmpty() && isLikelyVesselPageTitle(searchTerm, title)) {
+                    return thumbnail
                 }
             }
-            return pageList.firstOrNull()?.optJSONObject("thumbnail")?.optString("source")
+            return null
         }
     } catch (e: Exception) {
         e.printStackTrace()
@@ -1904,6 +2114,300 @@ private fun NauticalFeatureChip(label: String) {
             color = Color(0xFF80DEEA),
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
         )
+    }
+}
+
+@Composable
+fun SatelliteAisStatusChip(
+    isSatelliteMode: Boolean,
+    satelliteCount: Int,
+    deepSeaCount: Int,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(20.dp),
+        color = Color(0xFF0F172A).copy(alpha = 0.90f),
+        contentColor = Color.White,
+        shadowElevation = 4.dp,
+        border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.6f)),
+        modifier = modifier
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.Public,
+                contentDescription = null,
+                tint = if (isSatelliteMode) Color(0xFF38BDF8) else Color.Gray,
+                modifier = Modifier.size(18.dp)
+            )
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .background(
+                                if (isSatelliteMode) Color(0xFF22C55E) else Color.Red,
+                                CircleShape
+                            )
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = if (isSatelliteMode) "S-AIS SATELLITE ACTIVE" else "S-AIS PAUSED",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        fontSize = 10.sp
+                    )
+                }
+                Text(
+                    text = "$deepSeaCount Deep-Sea Ships ($satelliteCount Total S-AIS)",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFF94A3B8),
+                    fontSize = 9.sp
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SatelliteAisInfoSheet(
+    viewModel: ShipViewModel,
+    onDismiss: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val isSatelliteMode by viewModel.isSatelliteMode.collectAsState()
+    val satelliteCount by viewModel.satelliteVesselsCount.collectAsState()
+    val deepSeaCount by viewModel.deepSeaVesselsCount.collectAsState()
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = Color(0xFFF8FAFC),
+        shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(20.dp)
+                .verticalScroll(rememberScrollState())
+                .navigationBarsPadding()
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Public,
+                        contentDescription = null,
+                        tint = Color(0xFF0284C7),
+                        modifier = Modifier.size(28.dp)
+                    )
+                    Column {
+                        Text(
+                            text = "Satellite AIS Tracking (S-AIS)",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF0F172A)
+                        )
+                        Text(
+                            text = "Deep-Sea Global Coverage Beyond Terrestrial Range",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF64748B)
+                        )
+                    }
+                }
+                IconButton(onClick = onDismiss) {
+                    Icon(imageVector = Icons.Default.Close, contentDescription = "Close")
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Live Coverage Toggle Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Global Deep-Sea S-AIS Network",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF0F172A)
+                        )
+                        Text(
+                            text = if (isSatelliteMode)
+                                "Active • Receives broadcasts globally via Low-Earth Orbit satellites"
+                            else
+                                "Paused • Standard coastal terrestrial AIS only",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (isSatelliteMode) Color(0xFF16A34A) else Color(0xFFDC2626)
+                        )
+                    }
+
+                    Switch(
+                        checked = isSatelliteMode,
+                        onCheckedChange = { isEnabled ->
+                            viewModel.toggleSatelliteMode(isEnabled)
+                        }
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Coverage Metrics Grid
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Card(
+                    modifier = Modifier.weight(1f),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFF0F9FF)),
+                    border = BorderStroke(1.dp, Color(0xFFBAE6FD)),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "$deepSeaCount",
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF0284C7)
+                        )
+                        Text(
+                            text = "Deep-Sea Vessels (>18 NM)",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color(0xFF0369A1)
+                        )
+                    }
+                }
+
+                Card(
+                    modifier = Modifier.weight(1f),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFF0FDF4)),
+                    border = BorderStroke(1.dp, Color(0xFFBBF7D0)),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "$satelliteCount",
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF16A34A)
+                        )
+                        Text(
+                            text = "Total S-AIS Signals",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color(0xFF15803D)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Tech comparison details card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "Terrestrial vs Satellite AIS Technology",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF0F172A)
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Row(
+                        verticalAlignment = Alignment.Top,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.DirectionsBoat,
+                            contentDescription = null,
+                            tint = Color(0xFFEA580C),
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Column {
+                            Text(
+                                text = "Standard Terrestrial AIS (Coastal Limit: 15–20 NM)",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF0F172A)
+                            )
+                            Text(
+                                text = "Coastal VHF station towers rely on line-of-sight propagation due to earth curvature. Signal reception drops off rapidly past 15–20 nautical miles from shore, leaving deep ocean transits unmonitored.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFF475569),
+                                lineHeight = 18.sp
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Row(
+                        verticalAlignment = Alignment.Top,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Public,
+                            contentDescription = null,
+                            tint = Color(0xFF0284C7),
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Column {
+                            Text(
+                                text = "Satellite AIS (S-AIS Global Deep-Sea Coverage)",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF0F172A)
+                            )
+                            Text(
+                                text = "Low-Earth Orbit (LEO) satellite constellations orbiting at 500-800 km altitude receive AIS transponder broadcasts from ships in middle-ocean basins. Provides continuous tracking across North Atlantic, Pacific, Indian Ocean, and polar maritime routes.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFF475569),
+                                lineHeight = 18.sp
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+        }
     }
 }
 

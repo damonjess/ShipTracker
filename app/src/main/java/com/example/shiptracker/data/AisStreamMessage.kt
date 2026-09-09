@@ -25,7 +25,13 @@ data class ShipState(
     val rot: Int = -128, // Rate of turn
     val eta: String = "",
     val transponderClass: String = "Class A",
-    val lastSeenMillis: Long = System.currentTimeMillis()
+    val lastSeenMillis: Long = System.currentTimeMillis(),
+    val isSatelliteAis: Boolean = false,
+    val distanceFromShoreNm: Double = 0.0,
+    val trackingSource: String = "Terrestrial AIS",
+    val satelliteConstellation: String = "",
+    val satelliteSignalQuality: String = "",
+    val oceanZone: String = ""
 ) : ClusterItem {
     // Required overrides for the Clustering engine
     override val position: LatLng

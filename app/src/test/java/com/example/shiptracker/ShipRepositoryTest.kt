@@ -34,6 +34,7 @@ class ShipRepositoryTest {
     @Before
     fun setUp() {
         Dispatchers.setMain(testDispatcher)
+        ShipRepository.setSatelliteAisMode(true)
         ShipRepository.setShips(emptyList())
     }
 
@@ -122,5 +123,28 @@ class ShipRepositoryTest {
 
         val destHull = getMatchedDestination("GBHUL")
         assertEquals("Hull, UNITED KINGDOM", destHull)
+    }
+
+    @Test
+    fun testSatelliteAisModeToggleAndEnrichment() = runTest {
+        assertTrue(ShipRepository.isSatelliteAisMode.value)
+
+        val oceanShip = ShipState(
+            mmsi = 353136000L,
+            latitude = 44.50,
+            longitude = -32.80,
+            name = "EVER GIVEN"
+        )
+        ShipRepository.updateShip(oceanShip)
+
+        val retrieved = ShipRepository.ships.value[353136000L]
+        assertNotNull(retrieved)
+        assertTrue("Deep-sea vessel should be tracked via Satellite AIS", retrieved!!.isSatelliteAis)
+        assertTrue("Distance from shore should be greater than terrestrial cutoff (18 NM)", retrieved.distanceFromShoreNm > 18.0)
+        assertEquals("Satellite AIS (S-AIS)", retrieved.trackingSource)
+
+        ShipRepository.toggleSatelliteAisMode()
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertEquals(false, ShipRepository.isSatelliteAisMode.value)
     }
 }
