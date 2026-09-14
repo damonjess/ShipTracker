@@ -5,8 +5,10 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Warning
 import com.example.shiptracker.data.MarineWeather
+import com.example.shiptracker.data.ShipState
 import com.example.shiptracker.data.VesselPhotoStore
 import com.example.shiptracker.data.VesselTrackPoint
+import com.example.shiptracker.util.SitRepGenerator
 import com.example.shiptracker.util.CpaResult
 import com.example.shiptracker.util.FerryDatabase
 import com.example.shiptracker.util.GpxExporter
@@ -109,6 +111,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
@@ -122,7 +125,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.shiptracker.data.ShipCategory
-import com.example.shiptracker.data.ShipState
 import com.example.shiptracker.util.MarkerIconGenerator
 import com.example.shiptracker.util.VesselTypeDecoder
 import com.google.android.gms.maps.model.LatLng
@@ -636,18 +638,35 @@ fun OpenShipMap(
 
         vectorOverlay.items.clear()
         
-        if (mapView.zoomLevelDouble >= 11.0) {
+        // 🚨 FIX 1: Get your phone's exact screen pixel density
+        val density = context.resources.displayMetrics.density
+        
+        // ECDIS Standard: Show predictors when zoomed in enough to see tactical movements
+        if (mapView.zoomLevelDouble >= 9.5) { 
             ships.forEach { ship ->
-                if (ship.shipType != -1 && ship.speed > 1.0f) {
+                // Only draw lines for ships that are actually moving (> 0.5 knots)
+                if (ship.shipType != -1 && ship.speed > 0.5f) {
                     val startPoint = GeoPoint(ship.latitude, ship.longitude)
+                    
+                    // Predict where the ship will be in exactly 30 minutes
                     val distanceMeters = ship.speed * 1852.0 * 0.5 
-                    val projectedPoint = startPoint.destinationPoint(distanceMeters, ship.heading.toDouble())
+                    val course = if (ship.cog != 0f) ship.cog else ship.heading
+                    val projectedPoint = startPoint.destinationPoint(distanceMeters, course.toDouble())
 
                     val vectorLine = Polyline(mapView).apply {
-                        outlinePaint.color = android.graphics.Color.parseColor(trackColorHex)
-                        outlinePaint.strokeWidth = 3.5f
-                        outlinePaint.alpha = 120
-                        outlinePaint.pathEffect = DashPathEffect(floatArrayOf(15f, 20f), 0f)
+                        // 🚨 FIX 2: Match the exact color of the ship!
+                        val shipColor = MarkerIconGenerator.getShipAndroidColor(ship)
+                        
+                        outlinePaint.color = if (ship.isAnomalyFlagged) android.graphics.Color.parseColor("#DC2626") else shipColor
+                        
+                        // 🚨 FIX 3: Multiply by density so it's thick and highly visible
+                        outlinePaint.strokeWidth = 3f * density 
+                        outlinePaint.alpha = 255 // Full solid opacity
+                        
+                        // Scale the dashed lines so they don't look like tiny dots
+                        val dashLength = 10f * density
+                        val gapLength = 8f * density
+                        outlinePaint.pathEffect = DashPathEffect(floatArrayOf(dashLength, gapLength), 0f)
                         
                         setPoints(listOf(startPoint, projectedPoint))
                     }
@@ -1030,6 +1049,8 @@ fun ShipTrackerMainScreen(
                 calculatedEta = calculatedEta,
                 cpaRisk = cpaRisk,
                 rawTrackPoints = rawTrackPoints,
+                visibleShips = visibleShips,
+                weather = weather,
                 onClose = {
                     selectedVessel = null
                     viewModel.clearSelection()
@@ -1211,6 +1232,8 @@ fun VesselDetailsPanel(
     calculatedEta: String? = null,
     cpaRisk: CpaResult? = null,
     rawTrackPoints: List<VesselTrackPoint> = emptyList(),
+    visibleShips: List<ShipState> = emptyList(),
+    weather: MarineWeather? = null,
     onClose: () -> Unit = {},
     onTrackClick: () -> Unit = {}
 ) {
@@ -1742,6 +1765,81 @@ fun VesselDetailsPanel(
                 HorizontalDivider(color = Color(0xFFF1F5F9))
 
                 InfoTableRow(label = "AIS source", value = vessel.aisSource)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // 5. GENERATIVE AI SITREP (COMMAND CENTER)
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)), // Dark Terminal Blue
+            border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.5f)),
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 12.dp)) {
+                    Icon(
+                        imageVector = Icons.Default.Memory,
+                        contentDescription = null,
+                        tint = Color(0xFF38BDF8),
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Text(
+                        text = "Auto-Generated SitRep",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF38BDF8),
+                        modifier = Modifier.padding(start = 8.dp)
+                    )
+                }
+
+                // Call the generator directly using the raw ship state and active UI variables
+                val rawShip = visibleShips.find { it.mmsi == vessel.mmsi }
+                if (rawShip != null) {
+                    val reportText = SitRepGenerator.generateReport(
+                        ship = rawShip,
+                        weather = weather,
+                        departedLocation = departedLocation,
+                        calculatedEta = calculatedEta,
+                        cpaRisk = cpaRisk
+                    )
+
+                    Text(
+                        text = reportText,
+                        color = Color(0xFFE2E8F0),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontFamily = FontFamily.Monospace,
+                        lineHeight = 20.sp
+                    )
+                } else {
+                    val fallbackShip = ShipState(
+                        mmsi = vessel.mmsi,
+                        name = vessel.name,
+                        latitude = vessel.lat,
+                        longitude = vessel.lng,
+                        speed = vessel.speedKnots,
+                        heading = vessel.headingDeg,
+                        destination = vessel.reportedDestination
+                    )
+                    val reportText = SitRepGenerator.generateReport(
+                        ship = fallbackShip,
+                        weather = weather,
+                        departedLocation = departedLocation,
+                        calculatedEta = calculatedEta,
+                        cpaRisk = cpaRisk
+                    )
+
+                    Text(
+                        text = reportText,
+                        color = Color(0xFFE2E8F0),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontFamily = FontFamily.Monospace,
+                        lineHeight = 20.sp
+                    )
+                }
             }
         }
 
@@ -2733,35 +2831,31 @@ fun TactileCollisionRadar(cpaRisk: CpaResult?) {
     val context = LocalContext.current
     val vibrator = remember { context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator }
 
-    // This loop automatically restarts whenever the cpaRisk data changes
     LaunchedEffect(cpaRisk) {
         if (cpaRisk != null && cpaRisk.isRisk) {
             while (isActive) {
-                // 1. Fire a sharp 200ms pulse
+                // 🚨 FIX: Force Maximum Amplitude (255). MagicOS often ignores 'DEFAULT_AMPLITUDE'
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    vibrator.vibrate(VibrationEffect.createOneShot(200, VibrationEffect.DEFAULT_AMPLITUDE))
+                    vibrator.vibrate(VibrationEffect.createOneShot(300, 255)) // 255 is max strength
                 } else {
                     @Suppress("DEPRECATION")
-                    vibrator.vibrate(200)
+                    vibrator.vibrate(300)
                 }
 
-                // 2. Determine how long to wait before the next pulse based on TCPA
+                // Determine the delay based on how close they are
                 val delayMs = when {
-                    cpaRisk.tcpaMinutes <= 2.0 -> 400L   // Critical: 2 mins out -> Fast heartbeat
-                    cpaRisk.tcpaMinutes <= 5.0 -> 800L   // Warning: 5 mins out -> Steady pulse
-                    cpaRisk.tcpaMinutes <= 15.0 -> 2000L // Notice: 15 mins out -> Slow ping
-                    else -> 5000L                        // Monitoring: 15+ mins out -> Occasional ping
+                    cpaRisk.tcpaMinutes <= 2.0 -> 400L
+                    cpaRisk.tcpaMinutes <= 5.0 -> 800L
+                    cpaRisk.tcpaMinutes <= 15.0 -> 2000L
+                    else -> 5000L
                 }
-                
                 delay(delayMs)
             }
         } else {
-            // Instantly stop the motor if the ship turns away and the risk drops
             vibrator.cancel()
         }
     }
 
-    // Ensure the motor stops if the user closes the app or navigates away
     DisposableEffect(Unit) {
         onDispose { vibrator.cancel() }
     }

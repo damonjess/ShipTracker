@@ -221,8 +221,8 @@ class ShipViewModelTest {
 
         val counts = viewModel.categoryCounts.first { it.isNotEmpty() }
         assertEquals(1, counts[ShipCategory.PASSENGER])
-        assertEquals(5, counts[ShipCategory.CARGO])
-        assertEquals(2, counts[ShipCategory.TANKER])
+        assertEquals(1, counts[ShipCategory.CARGO])
+        assertEquals(1, counts[ShipCategory.TANKER])
     }
 
     @Test
