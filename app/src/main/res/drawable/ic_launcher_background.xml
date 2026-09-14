@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Base Ocean Background Gradient -->
+    <path android:pathData="M0,0h108v108h-108z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="0"
+                android:startY="0"
+                android:endX="108"
+                android:endY="108"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#0A1628" />
+                <item android:offset="0.5" android:color="#0F2847" />
+                <item android:offset="1.0" android:color="#173B68" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Subtle Radar Rings on Ocean -->
+    <path
+        android:pathData="M54,30 A24,24 0 1,1 53.99,30"
+        android:strokeWidth="1.2"
+        android:strokeColor="#2563EB"
+        android:strokeAlpha="0.3"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M54,16 A38,38 0 1,1 53.99,16"
+        android:strokeWidth="1.2"
+        android:strokeColor="#2563EB"
+        android:strokeAlpha="0.2"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M54,6 A48,48 0 1,1 53.99,6"
+        android:strokeWidth="1.0"
+        android:strokeColor="#38BDF8"
+        android:strokeAlpha="0.15"
+        android:fillColor="#00000000" />
+
+    <!-- Radar Crosshairs -->
+    <path
+        android:pathData="M54,6 L54,102"
+        android:strokeWidth="1.0"
+        android:strokeColor="#38BDF8"
+        android:strokeAlpha="0.15" />
+    <path
+        android:pathData="M6,54 L102,54"
+        android:strokeWidth="1.0"
+        android:strokeColor="#38BDF8"
+        android:strokeAlpha="0.15" />
+
+    <!-- Subtle Diagonal Compass Rays -->
+    <path
+        android:pathData="M20,20 L88,88"
+        android:strokeWidth="0.8"
+        android:strokeColor="#38BDF8"
+        android:strokeAlpha="0.08" />
+    <path
+        android:pathData="M88,20 L20,88"
+        android:strokeWidth="0.8"
+        android:strokeColor="#38BDF8"
+        android:strokeAlpha="0.08" />
+</vector>

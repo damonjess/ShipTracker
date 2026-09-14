@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- AIS Signal / Radar Pulses emanating from Antenna -->
+    <path
+        android:pathData="M42,20 A14,14 0 0,1 66,20"
+        android:strokeWidth="2.5"
+        android:strokeColor="#38BDF8"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M35,14 A21,21 0 0,1 73,14"
+        android:strokeWidth="2.5"
+        android:strokeColor="#38BDF8"
+        android:strokeAlpha="0.8"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M28,8 A28,28 0 0,1 80,8"
+        android:strokeWidth="2.0"
+        android:strokeColor="#38BDF8"
+        android:strokeAlpha="0.5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+
+    <!-- Mast / Antenna Structure -->
+    <path
+        android:pathData="M54,23 L54,38"
+        android:strokeWidth="2.5"
+        android:strokeColor="#F0F9FF"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M49,32 L59,32"
+        android:strokeWidth="2.0"
+        android:strokeColor="#F0F9FF"
+        android:strokeLineCap="round" />
+
+    <!-- Antenna Beacon Top Light -->
+    <path
+        android:pathData="M54,23m-3,0a3,3 0 1,0 6,0a3,3 0 1,0 -6,0"
+        android:fillColor="#38BDF8" />
+    <path
+        android:pathData="M54,23m-1.5,0a1.5,1.5 0 1,0 3,0a1.5,1.5 0 1,0 -3,0"
+        android:fillColor="#FFFFFF" />
+
+    <!-- Ship Wheelhouse / Upper Cabin -->
+    <path
+        android:pathData="M45,38 L63,38 L61,45 L47,45 Z"
+        android:fillColor="#E0F2FE" />
+
+    <!-- Wheelhouse Windows -->
+    <path
+        android:pathData="M48,40 h3 v3 h-3 z M53,40 h3 v3 h-3 z M58,40 h3 v3 h-3 z"
+        android:fillColor="#0284C7" />
+
+    <!-- Main Bridge Deck / Mid Superstructure -->
+    <path
+        android:pathData="M41,45 L67,45 L65,53 L43,53 Z"
+        android:fillColor="#FFFFFF" />
+
+    <!-- Bridge Shadow / Accent line -->
+    <path
+        android:pathData="M41,45 L67,45 L66,47 L42,47 Z"
+        android:fillColor="#BAE6FD" />
+
+    <!-- Port Hull (Left Side) with 3D Shading -->
+    <path
+        android:pathData="M30,53 L54,53 L54,75 L33,63 Z"
+        android:fillColor="#E0F2FE" />
+
+    <!-- Starboard Hull (Right Side) with 3D Shading -->
+    <path
+        android:pathData="M54,53 L78,53 L75,63 L54,75 Z"
+        android:fillColor="#BAE6FD" />
+
+    <!-- Red / Coral Waterline Band on Lower Hull -->
+    <path
+        android:pathData="M33,63 L54,75 L75,63 L73,67 L54,78 L35,67 Z"
+        android:fillColor="#EF4444" />
+
+    <!-- Hull Bow Center Seam Line -->
+    <path
+        android:pathData="M54,53 L54,78"
+        android:strokeWidth="1.2"
+        android:strokeColor="#0284C7"
+        android:strokeAlpha="0.5" />
+
+    <!-- Ocean Wave 1 (Foreground Waterline) -->
+    <path
+        android:pathData="M22,78 C32,73 43,82 54,77 C65,72 76,81 86,76"
+        android:strokeWidth="3.2"
+        android:strokeColor="#38BDF8"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+
+    <!-- Ocean Wave 2 (Deeper Ocean Wave) -->
+    <path
+        android:pathData="M28,84 C36,80 45,87 54,83 C63,79 72,86 80,82"
+        android:strokeWidth="2.5"
+        android:strokeColor="#0284C7"
+        android:strokeAlpha="0.9"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+</vector>
