@@ -103,8 +103,14 @@ class ShipViewModel(
     val isFavoritesOnly: StateFlow<Boolean> = _isFavoritesOnly.asStateFlow()
 
     init {
-        repository.startTracking()
-
+        // NOTE: repository.startTracking() was removed from here.
+        // Tracking is started by ShipTrackingService.onStartCommand(), which is
+        // launched from MainActivity. Having the ViewModel also start tracking
+        // was redundant and could start the WebSocket before the foreground
+        // service notification was shown, violating Android's foreground
+        // service requirements. It also meant that if the system recreated
+        // the ViewModel (e.g. after a process death), tracking would restart
+        // in the background even if the user had closed the app.
         viewModelScope.launch {
             combine(repository.ships, _favoriteMmsis) { shipMap, favorites ->
                 Pair(shipMap.values.toList(), favorites)

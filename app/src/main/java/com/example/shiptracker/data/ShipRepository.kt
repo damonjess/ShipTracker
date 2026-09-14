@@ -631,6 +631,16 @@ object ShipRepository {
     }
 
     fun stopTracking() {
+        // Clear the API key FIRST so that onClosed/onFailure callbacks
+        // triggered by webSocket?.cancel() cannot schedule a reconnect.
+        currentApiKey = ""
+
+        reconnectJob?.cancel()
+        reconnectJob = null
+
+        pendingBoundingBoxJob?.cancel()
+        pendingBoundingBoxJob = null
+
         webSocket?.cancel()
         webSocket = null
 
@@ -643,7 +653,5 @@ object ShipRepository {
         mpsJob?.cancel()
         mpsJob = null
         _messagesPerSecond.value = 0
-
-        currentApiKey = ""
     }
 }

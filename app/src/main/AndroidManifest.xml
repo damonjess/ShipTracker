@@ -39,7 +39,8 @@
         <service
             android:name=".service.ShipTrackingService"
             android:foregroundServiceType="dataSync"
-            android:exported="false" />
+            android:exported="false"
+            android:stopWithTask="true" />
 
         <provider
             android:name="androidx.core.content.FileProvider"
