@@ -5,6 +5,7 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Warning
 import com.example.shiptracker.data.MarineWeather
+import com.example.shiptracker.data.Earthquake
 import com.example.shiptracker.data.ShipState
 import com.example.shiptracker.data.VesselPhotoStore
 import com.example.shiptracker.data.VesselTrackPoint
@@ -15,8 +16,11 @@ import com.example.shiptracker.util.GpxExporter
 
 import android.animation.ValueAnimator
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.DashPathEffect
 import android.graphics.Paint
+import android.graphics.drawable.BitmapDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.VibrationEffect
@@ -145,6 +149,7 @@ import org.osmdroid.util.MapTileIndex
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.FolderOverlay
 import org.osmdroid.views.overlay.Marker
+import org.osmdroid.views.overlay.Polygon
 import org.osmdroid.views.overlay.Polyline
 import org.osmdroid.views.overlay.TilesOverlay
 import java.net.URLEncoder
@@ -476,9 +481,12 @@ fun OpenShipMap(
     recenterTrigger: Int = 0,
     mapType: AppMapType = AppMapType.LIGHT,
     followedShip: ShipState? = null,
+    earthquakes: List<Earthquake> = emptyList(),
+    minQuakeMag: Double = 2.5,
     onMapTouched: () -> Unit = {},
     onPanConsumed: () -> Unit = {},
     onViewportChanged: (north: Double, south: Double, east: Double, west: Double, zoom: Double) -> Unit = { _, _, _, _, _ -> },
+    onEarthquakeClick: (Earthquake) -> Unit = {},
     onShipClick: (ShipState) -> Unit
 ) {
     val context = LocalContext.current
@@ -581,6 +589,44 @@ fun OpenShipMap(
     val trackOverlay = remember { FolderOverlay().also { mapView.overlays.add(it) } }
     val vectorOverlay = remember { FolderOverlay().also { mapView.overlays.add(it) } }
     val shipOverlay = remember { FolderOverlay().also { mapView.overlays.add(it) } }
+    val earthquakeOverlay = remember { FolderOverlay().also { mapView.overlays.add(it) } }
+
+    LaunchedEffect(earthquakes, minQuakeMag) {
+        earthquakeOverlay.items.clear()
+        val filtered = earthquakes.filter { it.magnitude >= minQuakeMag }
+        val density = context.resources.displayMetrics.density
+        for (quake in filtered) {
+            val center = GeoPoint(quake.latitude, quake.longitude)
+            val radiusMeters = quake.magnitude * 30000.0
+            val circlePoints = Polygon.pointsAsCircle(center, radiusMeters)
+            val strokeColor = when {
+                quake.magnitude >= 6.0 -> android.graphics.Color.parseColor("#DC2626")
+                quake.magnitude >= 4.5 -> android.graphics.Color.parseColor("#D97706")
+                else -> android.graphics.Color.parseColor("#0284C7")
+            }
+            val polygon = Polygon().apply {
+                points = circlePoints
+                setFillColor((strokeColor and 0x00FFFFFF) or 0x33000000)
+                setStrokeColor(strokeColor)
+                setStrokeWidth(3f)
+                title = "M${quake.magnitude} - ${quake.place}"
+                subDescription = "Depth: ${quake.depthKm} km"
+            }
+            earthquakeOverlay.add(polygon)
+
+            val corePin = Marker(mapView).apply {
+                position = center
+                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                icon = BitmapDrawable(context.resources, createEpicenterDot(strokeColor, density))
+                setOnMarkerClickListener { _, _ ->
+                    onEarthquakeClick(quake)
+                    true
+                }
+            }
+            earthquakeOverlay.add(corePin)
+        }
+        mapView.invalidate()
+    }
     
     val markersMap = remember { mutableMapOf<Long, Marker>() }
     val animatorsMap = remember { mutableMapOf<Long, ValueAnimator>() }
@@ -827,6 +873,10 @@ fun ShipTrackerMainScreen(
     val rawTrackPoints by viewModel.rawSelectedTrackPoints.collectAsState()
     val cpaRisk by viewModel.cpaRisk.collectAsState()
     val weather by viewModel.currentMarineWeather.collectAsState()
+    val earthquakes by viewModel.earthquakes.collectAsState()
+    val tsunamiThreat by viewModel.activeTsunamiThreat.collectAsState()
+    val minQuakeMag by viewModel.minQuakeMag.collectAsState()
+    val selectedEarthquake by viewModel.selectedEarthquake.collectAsState()
 
     // 🚨 NEW: Engage the Tactile Radar hardware listener!
     TactileCollisionRadar(cpaRisk = cpaRisk)
@@ -846,7 +896,12 @@ fun ShipTrackerMainScreen(
         bottomBar = {
             AppBottomBar(
                 selectedIndex = selectedNavIndex,
-                onItemSelected = { selectedNavIndex = it }
+                onItemSelected = { index ->
+                    selectedNavIndex = index
+                    if (index == 3) {
+                        viewModel.clearSelection()
+                    }
+                }
             )
         }
     ) { paddingValues ->
@@ -867,8 +922,8 @@ fun ShipTrackerMainScreen(
                         onNavigateToMap = { selectedNavIndex = 0 }
                     )
                 }
-                else -> {
-                    // TAB 1: The Map (Your existing OpenShipMap and overlays)
+                0, 3 -> {
+                    // TAB 1 (Map) and TAB 4 (Seismic) BOTH render the Map in the background!
                     OpenShipMap(
                         ships = visibleShips,
                         trackPoints = trackPoints,
@@ -876,11 +931,16 @@ fun ShipTrackerMainScreen(
                         recenterTrigger = recenterTrigger,
                         mapType = currentMapType,
                         followedShip = followedShip,
+                        earthquakes = earthquakes,
+                        minQuakeMag = minQuakeMag,
                         onMapTouched = { viewModel.stopFollowing() },
                         onPanConsumed = { panTarget = null },
                         onViewportChanged = { north, south, east, west, zoom ->
                             viewModel.updateViewport(north, south, east, west)
                             viewModel.updateZoom(zoom)
+                        },
+                        onEarthquakeClick = { quake ->
+                            viewModel.selectEarthquake(quake)
                         },
                         onShipClick = { ship ->
                             selectedVessel = ship.toVessel()
@@ -919,36 +979,55 @@ fun ShipTrackerMainScreen(
                         )
                     }
 
-                    MapHeader(
-                        activeFilters = activeFilters,
-                        onFilterToggle = { viewModel.toggleFilter(it) },
-                        ships = unclusteredShips,
-                        totalActiveShipsCount = totalActiveShipsCount,
-                        allShips = allShips,
-                        categoryCounts = categoryCounts,
-                        isFavoritesOnly = isFavoritesOnly,
-                        onFavoritesOnlyToggle = { viewModel.toggleFavoritesOnly() },
-                        favoriteCount = favoriteMmsis.size,
-                        weather = weather,
-                        showNauticalInfoBanner = (currentMapType == AppMapType.NAUTICAL && showNauticalInfoBanner),
-                        onNauticalInfoClick = { showNauticalDetailsSheet = true },
-                        onNauticalDismiss = { showNauticalInfoBanner = false },
-                        isSatelliteMode = isSatelliteMode,
-                        satelliteCount = satelliteCount,
-                        deepSeaCount = deepSeaCount,
-                        onSatelliteClick = { showSatelliteAisSheet = true },
-                        onShipSearchSelected = { ship ->
-                            panTarget = ship
-                        },
-                        modifier = Modifier
-                            .align(Alignment.TopCenter)
-                            .padding(16.dp)
-                    )
+                    if (selectedNavIndex == 3) {
+                        TacticalSeismicFilter(
+                            currentFilter = minQuakeMag,
+                            onFilterSelected = { viewModel.setMinQuakeMagnitude(it) },
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .padding(16.dp)
+                        )
+
+                        if (tsunamiThreat != null) {
+                            TsunamiWarningBanner(
+                                threat = tsunamiThreat!!,
+                                modifier = Modifier
+                                    .align(Alignment.TopCenter)
+                                    .padding(top = 96.dp, start = 16.dp, end = 16.dp)
+                            )
+                        }
+                    } else {
+                        MapHeader(
+                            activeFilters = activeFilters,
+                            onFilterToggle = { viewModel.toggleFilter(it) },
+                            ships = unclusteredShips,
+                            totalActiveShipsCount = totalActiveShipsCount,
+                            allShips = allShips,
+                            categoryCounts = categoryCounts,
+                            isFavoritesOnly = isFavoritesOnly,
+                            onFavoritesOnlyToggle = { viewModel.toggleFavoritesOnly() },
+                            favoriteCount = favoriteMmsis.size,
+                            weather = weather,
+                            showNauticalInfoBanner = (currentMapType == AppMapType.NAUTICAL && showNauticalInfoBanner),
+                            onNauticalInfoClick = { showNauticalDetailsSheet = true },
+                            onNauticalDismiss = { showNauticalInfoBanner = false },
+                            isSatelliteMode = isSatelliteMode,
+                            satelliteCount = satelliteCount,
+                            deepSeaCount = deepSeaCount,
+                            onSatelliteClick = { showSatelliteAisSheet = true },
+                            onShipSearchSelected = { ship ->
+                                panTarget = ship
+                            },
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .padding(16.dp)
+                        )
+                    }
 
                     Box(
                         modifier = Modifier
                             .align(Alignment.TopEnd)
-                            .padding(top = 270.dp, end = 16.dp)
+                            .padding(top = if (selectedNavIndex == 3 && tsunamiThreat != null) 210.dp else 270.dp, end = 16.dp)
                     ) {
                         FloatingActionButton(
                             onClick = { showMapTypeMenu = true },
@@ -1003,7 +1082,7 @@ fun ShipTrackerMainScreen(
                             contentColor = Color.White,
                             modifier = Modifier
                                 .align(Alignment.TopCenter)
-                                .padding(top = 270.dp)
+                                .padding(top = if (selectedNavIndex == 3 && tsunamiThreat != null) 210.dp else 270.dp)
                         )
                     }
                 }
@@ -1058,6 +1137,22 @@ fun ShipTrackerMainScreen(
                 onTrackClick = {
                     viewModel.toggleFollow(displayVessel.mmsi)
                 }
+            )
+        }
+    }
+
+    if (selectedEarthquake != null) {
+        ModalBottomSheet(
+            onDismissRequest = {
+                viewModel.selectEarthquake(null)
+            },
+            containerColor = Color(0xFF0F172A),
+            contentColor = Color.White,
+            shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
+        ) {
+            EarthquakeDetailCard(
+                earthquake = selectedEarthquake!!,
+                onClose = { viewModel.selectEarthquake(null) }
             )
         }
     }
@@ -2062,24 +2157,44 @@ fun AppBottomBar(
     selectedIndex: Int = 0,
     onItemSelected: (Int) -> Unit = {}
 ) {
-    NavigationBar {
+    NavigationBar(
+        containerColor = Color(0xFF1E293B)
+    ) {
+        // 1. MAP TAB
         NavigationBarItem(
             selected = selectedIndex == 0,
             onClick = { onItemSelected(0) },
             icon = { Icon(Icons.Default.Public, contentDescription = "Map") },
             label = { Text("Map") }
         )
+        
+        // 2. MY FLEETS TAB
         NavigationBarItem(
             selected = selectedIndex == 1,
             onClick = { onItemSelected(1) },
-            icon = { Icon(Icons.Default.Folder, contentDescription = "Lists") },
+            icon = { Icon(Icons.Default.Folder, contentDescription = "My Fleets") },
             label = { Text("My Fleets") }
         )
+        
+        // 3. HEALTH TAB
         NavigationBarItem(
             selected = selectedIndex == 2,
             onClick = { onItemSelected(2) },
-            icon = { Icon(Icons.Default.Memory, contentDescription = "System Health") },
+            icon = { Icon(Icons.Default.Memory, contentDescription = "Health") },
             label = { Text("Health") }
+        )
+        
+        // 4. 🚨 SEISMIC TAB 🚨
+        NavigationBarItem(
+            selected = selectedIndex == 3,
+            onClick = { onItemSelected(3) },
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.Warning, 
+                    contentDescription = "Seismic Hazards"
+                )
+            },
+            label = { Text("Seismic") }
         )
     }
 }
@@ -2859,5 +2974,220 @@ fun TactileCollisionRadar(cpaRisk: CpaResult?) {
     DisposableEffect(Unit) {
         onDispose { vibrator.cancel() }
     }
+}
+
+@Composable
+fun TacticalSeismicFilter(
+    currentFilter: Double,
+    onFilterSelected: (Double) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        color = Color(0xFF0F172A).copy(alpha = 0.85f),
+        border = BorderStroke(1.dp, Color(0xFF334155))
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "SEISMIC EPICENTER RADAR (USGS M2.5+)",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF38BDF8)
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "Filter Mag:",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFF94A3B8)
+                )
+                val thresholds = listOf(2.5, 4.0, 5.0, 6.0)
+                thresholds.forEach { threshold ->
+                    FilterChip(
+                        selected = currentFilter == threshold,
+                        onClick = { onFilterSelected(threshold) },
+                        label = { Text("M${threshold}+") },
+                        colors = FilterChipDefaults.filterChipColors(
+                            containerColor = Color(0xFF1E293B),
+                            selectedContainerColor = Color(0xFF0284C7),
+                            labelColor = Color.White,
+                            selectedLabelColor = Color.White
+                        )
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun TsunamiWarningBanner(
+    threat: Earthquake,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFFFEF2F2).copy(alpha = 0.95f),
+            contentColor = Color(0xFF991B1B)
+        ),
+        border = BorderStroke(2.dp, Color(0xFFEF4444)),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Warning,
+                    contentDescription = "Tsunami Warning",
+                    tint = Color(0xFFDC2626)
+                )
+                Text(
+                    text = "ACTIVE TSUNAMI WARNING",
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFFDC2626),
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.padding(start = 8.dp)
+                )
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Magnitude ${threat.magnitude} earthquake detected near ${threat.place}. Tsunami advisory active.",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFF7F1D1D)
+            )
+        }
+    }
+}
+
+@Composable
+fun EarthquakeDetailCard(
+    earthquake: Earthquake,
+    onClose: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color(0xFF0F172A))
+            .padding(20.dp)
+            .navigationBarsPadding()
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Surface(
+                    color = when {
+                        earthquake.magnitude >= 6.0 -> Color(0xFFDC2626)
+                        earthquake.magnitude >= 4.5 -> Color(0xFFD97706)
+                        else -> Color(0xFF0284C7)
+                    },
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        text = "M${earthquake.magnitude}",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                    )
+                }
+                Column {
+                    Text(
+                        text = earthquake.place,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                    Text(
+                        text = "Depth: ${earthquake.depthKm} km",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFF94A3B8)
+                    )
+                }
+            }
+            IconButton(onClick = onClose) {
+                Icon(imageVector = Icons.Default.Close, contentDescription = "Close", tint = Color.White)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
+            border = BorderStroke(1.dp, Color(0xFF334155)),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                InfoTableRow(
+                    label = "Magnitude",
+                    value = "${earthquake.magnitude}",
+                    valueColor = Color.White
+                )
+                HorizontalDivider(color = Color(0xFF334155))
+                InfoTableRow(
+                    label = "Epicenter Location",
+                    value = "%.4f°, %.4f°".format(earthquake.latitude, earthquake.longitude),
+                    valueColor = Color.White
+                )
+                HorizontalDivider(color = Color(0xFF334155))
+                InfoTableRow(
+                    label = "Depth",
+                    value = "${earthquake.depthKm} km",
+                    valueColor = Color.White
+                )
+                HorizontalDivider(color = Color(0xFF334155))
+                InfoTableRow(
+                    label = "Tsunami Threat",
+                    value = if (earthquake.isTsunamiWarning) "ACTIVE ADVISORY" else "None",
+                    valueColor = if (earthquake.isTsunamiWarning) Color(0xFFEF4444) else Color(0xFF22C55E)
+                )
+                HorizontalDivider(color = Color(0xFF334155))
+                InfoTableRow(
+                    label = "Time (UTC)",
+                    value = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).apply {
+                        timeZone = TimeZone.getTimeZone("UTC")
+                    }.format(Date(earthquake.timeMillis)),
+                    valueColor = Color.White
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+    }
+}
+
+private fun createEpicenterDot(colorInt: Int, density: Float): Bitmap {
+    val sizePx = (14 * density).toInt()
+    val bitmap = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bitmap)
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = colorInt
+        style = Paint.Style.FILL
+    }
+    val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.WHITE
+        style = Paint.Style.STROKE
+        strokeWidth = 2f * density
+    }
+    val radius = sizePx / 2f
+    canvas.drawCircle(radius, radius, radius - (2f * density), paint)
+    canvas.drawCircle(radius, radius, radius - (2f * density), stroke)
+    return bitmap
 }
 

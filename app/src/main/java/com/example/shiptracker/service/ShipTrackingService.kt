@@ -13,6 +13,7 @@ import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import com.example.shiptracker.data.AppDatabase
+import com.example.shiptracker.data.EarthquakeRepository
 import com.example.shiptracker.data.ShipRepository
 
 class ShipTrackingService : Service() {
@@ -30,6 +31,7 @@ class ShipTrackingService : Service() {
         createNotificationChannel()
         val dao = AppDatabase.getDatabase(applicationContext).vesselDao()
         ShipRepository.initialize(dao)
+        EarthquakeRepository.startSyncing()
 
         val powerManager = getSystemService(POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(
@@ -104,6 +106,7 @@ class ShipTrackingService : Service() {
     // Safe to call multiple times due to null/held checks.
     private fun cleanupResources() {
         ShipRepository.stopTracking()
+        EarthquakeRepository.stopSyncing()
 
         if (wakeLock?.isHeld == true) {
             wakeLock?.release()
