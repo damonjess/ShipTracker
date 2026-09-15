@@ -11,7 +11,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -23,16 +26,18 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
 @Composable
-fun SystemHealthScreen(viewModel: ShipViewModel) {
+fun SystemHealthScreen(
+    viewModel: ShipViewModel,
+    onLaunchSentinel: () -> Unit = {}
+) {
     val webSocketState by viewModel.webSocketState.collectAsState()
     val shipsInMemory by viewModel.totalShipsInMemory.collectAsState()
     val dbSize by viewModel.databasePointCount.collectAsState()
     val isSatellite by viewModel.isSatelliteMode.collectAsState()
-    
-    // 🚨 NEW: Collect the Ping Rate
     val mps by viewModel.messagesPerSecond.collectAsState()
 
     Column(
@@ -42,12 +47,31 @@ fun SystemHealthScreen(viewModel: ShipViewModel) {
         Text("System Diagnostics", style = MaterialTheme.typography.headlineMedium)
         HorizontalDivider(modifier = Modifier.padding(bottom = 8.dp))
 
+        // 🚀 LAUNCH SENTINEL BUTTON
+        Button(
+            onClick = onLaunchSentinel,
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Color(0xFF0F172A),
+                contentColor = Color.Green
+            )
+        ) {
+            Icon(
+                imageVector = Icons.Default.Videocam,
+                contentDescription = null,
+                modifier = Modifier.padding(end = 8.dp)
+            )
+            Text(
+                "🚀 LAUNCH PROJECT SENTINEL (NPU AI)",
+                fontWeight = FontWeight.Bold
+            )
+        }
+
         // Network Layer
         DiagnosticCard(
             title = "Network Layer (AISStream)",
             icon = Icons.Default.Wifi,
             value = webSocketState,
-            // 🚨 NEW: Add the live velocity to the subtitle
             subtitle = if (webSocketState.contains("Live")) "$mps msgs/sec (Live Velocity)" else "0 msgs/sec",
             valueColor = if (webSocketState.contains("Live")) Color(0xFF4CAF50) else Color(0xFFF44336)
         )

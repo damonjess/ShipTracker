@@ -68,6 +68,16 @@ dependencies {
     // Image loading
     implementation("io.coil-kt:coil-compose:2.6.0")
 
+    // CameraX for raw frame capture
+    val camerax_version = "1.3.1"
+    implementation("androidx.camera:camera-core:${camerax_version}")
+    implementation("androidx.camera:camera-camera2:${camerax_version}")
+    implementation("androidx.camera:camera-lifecycle:${camerax_version}")
+    implementation("androidx.camera:camera-view:${camerax_version}")
+
+    // ONNX Runtime for Mobile
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.16.3")
+
     // Maps & Network dependencies
     implementation("org.osmdroid:osmdroid-android:6.1.18")
     implementation(libs.maps.compose)

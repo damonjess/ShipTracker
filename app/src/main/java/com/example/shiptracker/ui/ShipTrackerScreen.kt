@@ -891,30 +891,43 @@ fun ShipTrackerMainScreen(
 
     var panTarget by remember { mutableStateOf<ShipState?>(null) }
     var recenterTrigger by remember { mutableIntStateOf(0) }
+    var showSentinelCamera by remember { mutableStateOf(false) }
 
-    Scaffold(
-        bottomBar = {
-            AppBottomBar(
-                selectedIndex = selectedNavIndex,
-                onItemSelected = { index ->
-                    selectedNavIndex = index
-                    if (index == 3) {
-                        viewModel.clearSelection()
+    if (showSentinelCamera) {
+        SentinelCameraScreen(
+            ships = allShips,
+            userLat = allShips.firstOrNull()?.latitude ?: 51.92,
+            userLon = allShips.firstOrNull()?.longitude ?: 4.47,
+            compassHeading = 0f,
+            onBack = { showSentinelCamera = false }
+        )
+    } else {
+        Scaffold(
+            bottomBar = {
+                AppBottomBar(
+                    selectedIndex = selectedNavIndex,
+                    onItemSelected = { index ->
+                        selectedNavIndex = index
+                        if (index == 3) {
+                            viewModel.clearSelection()
+                        }
                     }
-                }
-            )
-        }
-    ) { paddingValues ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-        ) {
-            when (selectedNavIndex) {
-                2 -> {
-                    // TAB 3: Health
-                    SystemHealthScreen(viewModel = viewModel)
-                }
+                )
+            }
+        ) { paddingValues ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(paddingValues)
+            ) {
+                when (selectedNavIndex) {
+                    2 -> {
+                        // TAB 3: Health
+                        SystemHealthScreen(
+                            viewModel = viewModel,
+                            onLaunchSentinel = { showSentinelCamera = true }
+                        )
+                    }
                 1 -> {
                     // TAB 2: My Fleets
                     MyFleetsScreen(
@@ -1155,6 +1168,7 @@ fun ShipTrackerMainScreen(
                 onClose = { viewModel.selectEarthquake(null) }
             )
         }
+    }
     }
 }
 
