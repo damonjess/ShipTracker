@@ -21,7 +21,7 @@ class SentinelEngine(context: Context) {
 
             // 2. Configure Hardware Acceleration (Crucial for live camera feeds)
             val sessionOptions = OrtSession.SessionOptions().apply {
-                setOptimizationLevel(OrtSession.SessionOptions.OptLevel.NO_OPT)
+                setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
                 // Push processing to the NPU/GPU using Android's NNAPI
                 try {
                     addNnapi(EnumSet.of(NNAPIFlags.USE_FP16, NNAPIFlags.CPU_DISABLED))

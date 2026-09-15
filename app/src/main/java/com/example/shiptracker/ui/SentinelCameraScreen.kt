@@ -205,14 +205,14 @@ fun SentinelCameraScreen(
                 )
 
                 Canvas(modifier = Modifier.fillMaxSize()) {
-                    val scaleX = size.width / 640f
-                    val scaleY = size.height / 640f
+                    val canvasWidth = size.width
+                    val canvasHeight = size.height
 
                     for (box in detectedBoxes) {
-                        val left = box.x1 * scaleX
-                        val top = box.y1 * scaleY
-                        val right = box.x2 * scaleX
-                        val bottom = box.y2 * scaleY
+                        val left = box.x1 * canvasWidth
+                        val top = box.y1 * canvasHeight
+                        val right = box.x2 * canvasWidth
+                        val bottom = box.y2 * canvasHeight
 
                         val boxColor = if (spoofAlerts.isNotEmpty()) Color.Red else Color.Green
 
