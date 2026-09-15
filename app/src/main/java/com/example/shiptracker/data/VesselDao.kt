@@ -11,6 +11,9 @@ interface VesselDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertPoint(point: VesselTrackPoint)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertPoints(points: List<VesselTrackPoint>)
+
     // Retrieve points in chronological order for drawing the Polyline
     @Query("SELECT * FROM vessel_track_points WHERE mmsi = :mmsi ORDER BY timestamp ASC")
     fun getTrackForVessel(mmsi: Long): Flow<List<VesselTrackPoint>>
@@ -25,4 +28,7 @@ interface VesselDao {
 
     @Query("SELECT * FROM vessel_track_points WHERE mmsi = :mmsi ORDER BY timestamp DESC LIMIT 1")
     suspend fun getLastPointForVessel(mmsi: Long): VesselTrackPoint?
+
+    @Query("SELECT * FROM vessel_track_points")
+    suspend fun getAllPoints(): List<VesselTrackPoint>
 }

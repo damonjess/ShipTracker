@@ -19,20 +19,29 @@ class SentinelEngine(context: Context) {
             // 1. Initialize the ONNX Environment
             ortEnv = OrtEnvironment.getEnvironment()
 
-            // 2. Configure Hardware Acceleration (Crucial for live camera feeds)
-            val sessionOptions = OrtSession.SessionOptions().apply {
-                setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
-                // Push processing to the NPU/GPU using Android's NNAPI
-                try {
-                    addNnapi(EnumSet.of(NNAPIFlags.USE_FP16, NNAPIFlags.CPU_DISABLED))
-                } catch (e: Exception) {
-                    // Fallback to default CPU if NNAPI is not supported on device/emulator
-                }
-            }
-
             // Make sure the file is exactly in app/src/main/assets/ship_detector.onnx
             val modelBytes = context.assets.open("ship_detector.onnx").readBytes()
-            ortSession = ortEnv?.createSession(modelBytes, sessionOptions)
+
+            // 2. Configure Hardware Acceleration with graceful CPU fallback
+            var session: OrtSession? = null
+            try {
+                val sessionOptions = OrtSession.SessionOptions().apply {
+                    setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+                    addNnapi(EnumSet.of(NNAPIFlags.USE_FP16))
+                }
+                session = ortEnv?.createSession(modelBytes, sessionOptions)
+            } catch (e: Exception) {
+                Log.w("SentinelEngine", "NNAPI acceleration failed, falling back to CPU", e)
+            }
+
+            if (session == null) {
+                val cpuOptions = OrtSession.SessionOptions().apply {
+                    setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+                }
+                session = ortEnv?.createSession(modelBytes, cpuOptions)
+            }
+
+            ortSession = session
         } catch (e: Exception) {
             Log.e("SentinelEngine", "FAILED TO LOAD ONNX MODEL", e)
         }

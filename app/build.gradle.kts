@@ -87,6 +87,7 @@ dependencies {
     implementation(libs.maps.utils)
     implementation(libs.okhttp)
     implementation(libs.kotlinx.serialization.json)
+    implementation("com.google.code.gson:gson:2.10.1")
 
     // Room dependencies
     implementation(libs.androidx.room.runtime)
