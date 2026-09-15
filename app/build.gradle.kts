@@ -47,6 +47,9 @@ android {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
+    androidResources {
+        noCompress += "onnx"
+    }
     buildFeatures {
         compose = true
         buildConfig = true
@@ -76,7 +79,7 @@ dependencies {
     implementation("androidx.camera:camera-view:${camerax_version}")
 
     // ONNX Runtime for Mobile
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.16.3")
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.30.0")
 
     // Maps & Network dependencies
     implementation("org.osmdroid:osmdroid-android:6.1.18")

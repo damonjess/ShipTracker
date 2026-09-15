@@ -5,6 +5,7 @@ import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import ai.onnxruntime.providers.NNAPIFlags
+import android.util.Log
 import java.nio.FloatBuffer
 import java.util.Collections
 import java.util.EnumSet
@@ -20,6 +21,7 @@ class SentinelEngine(context: Context) {
 
             // 2. Configure Hardware Acceleration (Crucial for live camera feeds)
             val sessionOptions = OrtSession.SessionOptions().apply {
+                setOptimizationLevel(OrtSession.SessionOptions.OptLevel.NO_OPT)
                 // Push processing to the NPU/GPU using Android's NNAPI
                 try {
                     addNnapi(EnumSet.of(NNAPIFlags.USE_FP16, NNAPIFlags.CPU_DISABLED))
@@ -28,30 +30,16 @@ class SentinelEngine(context: Context) {
                 }
             }
 
-            // 3. Load the model from the assets folder (with fallback if asset doesn't exist yet)
-            val inputStream = try {
-                context.assets.open("ship_detector.onnx")
-            } catch (e: Exception) {
-                null
-            }
-
-            if (inputStream != null) {
-                val modelBytes = inputStream.readBytes()
-                ortSession = ortEnv?.createSession(modelBytes, sessionOptions)
-            }
+            // Make sure the file is exactly in app/src/main/assets/ship_detector.onnx
+            val modelBytes = context.assets.open("ship_detector.onnx").readBytes()
+            ortSession = ortEnv?.createSession(modelBytes, sessionOptions)
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e("SentinelEngine", "FAILED TO LOAD ONNX MODEL", e)
         }
     }
 
     fun analyzeFrame(tensorInput: FloatArray): FloatArray? {
-        val session = ortSession
-        if (session == null) {
-            // Graceful fallback demo detection when ship_detector.onnx is missing.
-            // Generates a simulated MSC Cargo Ship bounding box [x1, y1, x2, y2, confidence, classId]
-            // in 640x640 coordinate space so the green bounding box snaps instantly during testing.
-            return floatArrayOf(100f, 150f, 540f, 450f, 0.94f, 0f)
-        }
+        val session = ortSession ?: return null
         val env = ortEnv ?: return null
 
         try {

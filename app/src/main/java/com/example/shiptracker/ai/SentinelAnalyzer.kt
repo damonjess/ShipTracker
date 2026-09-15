@@ -80,17 +80,40 @@ class SentinelAnalyzer(
         }
 
         val boxes = mutableListOf<BoundingBox>()
-        val stride = 6
-        var i = 0
-        while (i + stride <= output.size) {
-            val x1 = output[i]
-            val y1 = output[i + 1]
-            val x2 = output[i + 2]
-            val y2 = output[i + 3]
-            val conf = output[i + 4]
-            val classId = output[i + 5].toInt()
+        
+        // Ultralytics YOLOv8 shape is typically [1, 84, 8400] 
+        // which flattens to [84 rows x 8400 columns]
+        val numColumns = 8400
+        val numRows = output.size / numColumns
 
-            if (conf > 0.5f) {
+        if (numRows < 5) return emptyList()
+
+        for (c in 0 until numColumns) {
+            var maxClassScore = 0f
+            var classId = -1
+
+            // Find the class with the highest probability for this column (anchor)
+            for (r in 4 until numRows) {
+                val score = output[r * numColumns + c]
+                if (score > maxClassScore) {
+                    maxClassScore = score
+                    classId = r - 4
+                }
+            }
+
+            // Confidence threshold
+            if (maxClassScore > 0.5f) {
+                val xc = output[0 * numColumns + c]
+                val yc = output[1 * numColumns + c]
+                val w = output[2 * numColumns + c]
+                val h = output[3 * numColumns + c]
+
+                // Convert from center coordinates to Top, Left, Bottom, Right
+                val x1 = xc - w / 2
+                val y1 = yc - h / 2
+                val x2 = xc + w / 2
+                val y2 = yc + h / 2
+
                 val vesselClass = when (classId) {
                     0 -> "Cargo"
                     1 -> "Tanker"
@@ -98,9 +121,8 @@ class SentinelAnalyzer(
                     8 -> "Vessel / Boat" // Standard COCO class index for boats
                     else -> "Vessel ($classId)"
                 }
-                boxes.add(BoundingBox(x1, y1, x2, y2, conf, vesselClass))
+                boxes.add(BoundingBox(x1, y1, x2, y2, maxClassScore, vesselClass))
             }
-            i += stride
         }
 
         return applyNms(boxes, 0.45f)
