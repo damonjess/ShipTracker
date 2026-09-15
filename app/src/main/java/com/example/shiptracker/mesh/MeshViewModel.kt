@@ -1,16 +1,51 @@
 package com.example.shiptracker.mesh
 
+import android.content.Context
+import android.net.wifi.p2p.WifiP2pDevice
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.shiptracker.data.VesselDao
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
-class MeshViewModel(private val vesselDao: VesselDao) : ViewModel() {
+class MeshViewModel(
+    context: Context,
+    private val vesselDao: VesselDao
+) : ViewModel() {
     
     private val serializer = MeshSerializer()
     private val transmitter = MeshTransmitter()
+
+    private val _discoveredPeers = MutableStateFlow<List<WifiP2pDevice>>(emptyList())
+    val discoveredPeers: StateFlow<List<WifiP2pDevice>> = _discoveredPeers.asStateFlow()
+
+    // We need a function that the BroadcastReceiver can call to update this list
+    fun updatePeers(peers: List<WifiP2pDevice>) {
+        _discoveredPeers.value = peers
+    }
+
+    val meshNegotiator = MeshNegotiator(
+        context = context.applicationContext,
+        onHostIpDiscovered = { hostIp ->
+            firePayloadToHost(hostIp)
+        },
+        onPeersChanged = { newPeers ->
+            updatePeers(newPeers)
+        }
+    )
+
+    fun startScan() {
+        meshNegotiator.discoverNodes()
+    }
+
+    fun connectToTarget(device: WifiP2pDevice) {
+        meshNegotiator.connectToDevice(device)
+    }
+
     
     // Start the receiver and define what happens when a payload hits the socket
     val receiver = MeshReceiver(onPayloadReceived = { payload ->
@@ -33,11 +68,14 @@ class MeshViewModel(private val vesselDao: VesselDao) : ViewModel() {
         }
     }
 
-    class Factory(private val vesselDao: VesselDao) : ViewModelProvider.Factory {
+    class Factory(
+        private val context: Context,
+        private val vesselDao: VesselDao
+    ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             if (modelClass.isAssignableFrom(MeshViewModel::class.java)) {
-                return MeshViewModel(vesselDao) as T
+                return MeshViewModel(context, vesselDao) as T
             }
             throw IllegalArgumentException("Unknown ViewModel class")
         }

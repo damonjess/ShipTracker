@@ -6,13 +6,17 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.net.NetworkInfo
+import android.net.wifi.WpsInfo
+import android.net.wifi.p2p.WifiP2pConfig
+import android.net.wifi.p2p.WifiP2pDevice
 import android.net.wifi.p2p.WifiP2pManager
 import android.os.Build
 import android.util.Log
 
 class MeshNegotiator(
     private val context: Context,
-    private val onHostIpDiscovered: (String) -> Unit
+    private val onHostIpDiscovered: (String) -> Unit,
+    private val onPeersChanged: (List<WifiP2pDevice>) -> Unit
 ) {
     private val manager: WifiP2pManager? = context.getSystemService(Context.WIFI_P2P_SERVICE) as? WifiP2pManager
     private val channel = manager?.initialize(context, context.mainLooper, null)
@@ -20,6 +24,7 @@ class MeshNegotiator(
     // We only care about connection events for the data burst
     val intentFilter = IntentFilter().apply {
         addAction(WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION)
+        addAction(WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION)
     }
 
     private val receiver = object : BroadcastReceiver() {
@@ -50,6 +55,11 @@ class MeshNegotiator(
                 } else {
                     Log.d("MeshNegotiator", "🛑 P2P DISCONNECTED")
                 }
+            } else if (intent.action == WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION) {
+                @SuppressLint("MissingPermission")
+                manager?.requestPeers(channel) { peers ->
+                    onPeersChanged(peers.deviceList.toList())
+                }
             }
         }
     }
@@ -79,6 +89,22 @@ class MeshNegotiator(
             }
             override fun onFailure(reasonCode: Int) {
                 Log.e("MeshNegotiator", "❌ SCAN FAILED: Code $reasonCode")
+            }
+        })
+    }
+
+    @SuppressLint("MissingPermission")
+    fun connectToDevice(device: WifiP2pDevice) {
+        val config = WifiP2pConfig().apply {
+            deviceAddress = device.deviceAddress
+            wps.setup = WpsInfo.PBC
+        }
+        manager?.connect(channel, config, object : WifiP2pManager.ActionListener {
+            override fun onSuccess() {
+                Log.d("MeshNegotiator", "📡 CONNECTING TO ${device.deviceName}...")
+            }
+            override fun onFailure(reasonCode: Int) {
+                Log.e("MeshNegotiator", "❌ CONNECTION FAILED: Code $reasonCode")
             }
         })
     }

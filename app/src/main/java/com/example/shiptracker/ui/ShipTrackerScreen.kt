@@ -906,7 +906,10 @@ fun ShipTrackerMainScreen(
         )
     } else if (showSilentMesh) {
         val meshViewModel: MeshViewModel = viewModel(
-            factory = MeshViewModel.Factory(AppDatabase.getDatabase(context).vesselDao())
+            factory = MeshViewModel.Factory(
+                context = context.applicationContext,
+                vesselDao = AppDatabase.getDatabase(context).vesselDao()
+            )
         )
         SilentMeshScreen(
             viewModel = meshViewModel,
