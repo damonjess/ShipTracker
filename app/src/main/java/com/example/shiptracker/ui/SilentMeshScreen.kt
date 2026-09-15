@@ -7,8 +7,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -21,7 +25,10 @@ import com.example.shiptracker.mesh.MeshNegotiator
 import com.example.shiptracker.mesh.MeshViewModel
 
 @Composable
-fun SilentMeshScreen(viewModel: MeshViewModel) {
+fun SilentMeshScreen(
+    viewModel: MeshViewModel,
+    onBack: () -> Unit = {}
+) {
     val context = LocalContext.current
     
     // 1. Initialize the Negotiator
@@ -48,6 +55,14 @@ fun SilentMeshScreen(viewModel: MeshViewModel) {
         modifier = Modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.Center
     ) {
+        IconButton(onClick = onBack, modifier = Modifier.padding(bottom = 16.dp)) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = "Back",
+                tint = MaterialTheme.colorScheme.primary
+            )
+        }
+
         Text(
             text = "SILENT MESH DATALINK",
             style = MaterialTheme.typography.headlineMedium,

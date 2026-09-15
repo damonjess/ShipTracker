@@ -9,6 +9,8 @@ import com.example.shiptracker.data.Earthquake
 import com.example.shiptracker.data.ShipState
 import com.example.shiptracker.data.VesselPhotoStore
 import com.example.shiptracker.data.VesselTrackPoint
+import com.example.shiptracker.data.AppDatabase
+import com.example.shiptracker.mesh.MeshViewModel
 import com.example.shiptracker.util.SitRepGenerator
 import com.example.shiptracker.util.CpaResult
 import com.example.shiptracker.util.FerryDatabase
@@ -892,6 +894,7 @@ fun ShipTrackerMainScreen(
     var panTarget by remember { mutableStateOf<ShipState?>(null) }
     var recenterTrigger by remember { mutableIntStateOf(0) }
     var showSentinelCamera by remember { mutableStateOf(false) }
+    var showSilentMesh by remember { mutableStateOf(false) }
 
     if (showSentinelCamera) {
         SentinelCameraScreen(
@@ -900,6 +903,14 @@ fun ShipTrackerMainScreen(
             userLon = allShips.firstOrNull()?.longitude ?: 4.47,
             compassHeading = 0f,
             onBack = { showSentinelCamera = false }
+        )
+    } else if (showSilentMesh) {
+        val meshViewModel: MeshViewModel = viewModel(
+            factory = MeshViewModel.Factory(AppDatabase.getDatabase(context).vesselDao())
+        )
+        SilentMeshScreen(
+            viewModel = meshViewModel,
+            onBack = { showSilentMesh = false }
         )
     } else {
         Scaffold(
@@ -925,7 +936,8 @@ fun ShipTrackerMainScreen(
                         // TAB 3: Health
                         SystemHealthScreen(
                             viewModel = viewModel,
-                            onLaunchSentinel = { showSentinelCamera = true }
+                            onLaunchSentinel = { showSentinelCamera = true },
+                            onLaunchSilentMesh = { showSilentMesh = true }
                         )
                     }
                 1 -> {
