@@ -27,6 +27,7 @@ data class Ship(
     val lon: Double = 0.0,
     val mmsi: Long = 0L,
     val name: String = "",
+    val timestamp: String? = null
 )
 
 fun ShipState.toShip(): Ship = Ship(

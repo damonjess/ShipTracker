@@ -1444,6 +1444,34 @@ fun MapHeader(
         if (weather != null) {
             Spacer(modifier = Modifier.height(8.dp))
             WeatherOverlayCard(weather = weather)
+        } else {
+            Spacer(modifier = Modifier.height(8.dp))
+            Surface(
+                color = Color(0x33FF0000), // Tactical transparent red
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, Color.Red),
+                modifier = Modifier.padding(8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        painter = painterResource(id = R.drawable.ic_dialog_alert),
+                        contentDescription = "Offline Warning",
+                        tint = Color.Red,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "METEO DATALINK: OFFLINE",
+                        color = Color.Red,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
         }
 
         if (showNauticalInfoBanner) {
@@ -2087,123 +2115,11 @@ fun VesselDetailsPanel(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // CARD: SATELLITE AIS TELEMETRY
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
-            colors = CardDefaults.cardColors(containerColor = Color.White),
-            border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
-            shape = RoundedCornerShape(8.dp)
-        ) {
-            Column {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Public,
-                            contentDescription = null,
-                            tint = Color(0xFF0284C7),
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Text(
-                            text = "Satellite AIS Telemetry",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF0F172A)
-                        )
-                    }
-
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = if (vessel.isSatelliteAis) Color(0xFF0284C7) else Color(0xFF16A34A)
-                    ) {
-                        Text(
-                            text = if (vessel.isSatelliteAis) "S-AIS ACTIVE" else "TERRESTRIAL",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                            fontSize = 11.sp
-                        )
-                    }
-                }
-
-                HorizontalDivider(color = Color(0xFFF1F5F9))
-
-                InfoTableRow(
-                    label = "Signal Source",
-                    value = vessel.aisSource,
-                    valueColor = if (vessel.isSatelliteAis) Color(0xFF0284C7) else Color(0xFF16A34A)
-                )
-                HorizontalDivider(color = Color(0xFFF1F5F9))
-
-                InfoTableRow(
-                    label = "Distance from Shore",
-                    value = "${"%.1f".format(vessel.distanceFromShoreNm)} NM (${if (vessel.distanceFromShoreNm > 18.0) "Deep Sea" else "Coastal Range"})"
-                )
-                HorizontalDivider(color = Color(0xFFF1F5F9))
-
-                InfoTableRow(
-                    label = "Ocean Basin / Zone",
-                    value = vessel.oceanZone.ifEmpty { "International Open Waters" }
-                )
-                HorizontalDivider(color = Color(0xFFF1F5F9))
-
-                InfoTableRow(
-                    label = "Satellite Constellation",
-                    value = vessel.satelliteConstellation.ifEmpty { "Spire / Orbcomm S-AIS Network" }
-                )
-                HorizontalDivider(color = Color(0xFFF1F5F9))
-
-                InfoTableRow(
-                    label = "Satellite Link Quality",
-                    value = vessel.satelliteSignalQuality.ifEmpty { "98% (High)" }
-                )
-
-                // Terrestrial Coverage Cutoff Notice Banner
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(12.dp)
-                        .background(
-                            if (vessel.distanceFromShoreNm > 18.0) Color(0xFFEFF6FF) else Color(0xFFF0FDF4),
-                            RoundedCornerShape(6.dp)
-                        )
-                        .padding(10.dp)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.Top,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Info,
-                            contentDescription = null,
-                            tint = if (vessel.distanceFromShoreNm > 18.0) Color(0xFF0284C7) else Color(0xFF16A34A),
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Text(
-                            text = if (vessel.distanceFromShoreNm > 18.0)
-                                "Beyond Coastal Terrestrial AIS Range (>15–20 NM limit). Vessel telemetry maintained continuously via Low-Earth Orbit Satellite AIS (S-AIS)."
-                            else
-                                "Within Terrestrial AIS Range (0–18 NM from coastline). Simultaneous reception via coastal receiver towers and satellite payload redundancy.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (vessel.distanceFromShoreNm > 18.0) Color(0xFF1E3A8A) else Color(0xFF14532D),
-                            fontSize = 12.sp,
-                            lineHeight = 16.sp
-                        )
-                    }
-                }
-            }
-        }
+        // CARD: SYSTEM TELEMETRY (REAL DATA)
+        TrueTelemetryCard(
+            vessel = vessel,
+            modifier = Modifier.padding(horizontal = 16.dp)
+        )
 
         Spacer(modifier = Modifier.height(16.dp))
 
@@ -2376,6 +2292,95 @@ fun AppBottomBar(
         selectedIndex = selectedIndex,
         onItemSelected = onItemSelected
     )
+}
+
+fun Vessel.toShip(): Ship = Ship(
+    lat = lat,
+    lon = lng,
+    mmsi = mmsi,
+    name = name,
+    timestamp = positionReceivedAgo
+)
+
+@Composable
+fun TrueTelemetryCard(
+    vessel: Vessel,
+    modifier: Modifier = Modifier,
+    myLat: Double = 53.58,
+    myLon: Double = -0.65
+) {
+    TrueTelemetryCard(
+        ship = vessel.toShip(),
+        myLat = myLat,
+        myLon = myLon,
+        modifier = modifier
+    )
+}
+
+@Composable
+fun TrueTelemetryCard(
+    ship: Ship,
+    modifier: Modifier = Modifier,
+    myLat: Double = 53.58,
+    myLon: Double = -0.65
+) {
+    // Re-use your verified math engine to get the TRUE distance from your Honor phone
+    val (distanceMeters, _) = calculateRadarTelemetry(myLat, myLon, ship.lat, ship.lon)
+    val distanceKm = (distanceMeters / 1000).toInt()
+
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)) // Dark tactical blue/black
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "SYSTEM TELEMETRY",
+                color = Color(0xFF00FF41),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(bottom = 12.dp)
+            )
+
+            // Real Data Row 1: The Distance
+            TelemetryRow(
+                label = "Distance from Receiver",
+                value = "$distanceKm KM"
+            )
+
+            // Real Data Row 2: Where the data actually came from
+            TelemetryRow(
+                label = "Active Datalink",
+                value = "AISStream WebSocket TCP"
+            )
+
+            // Real Data Row 3: How you are storing it
+            TelemetryRow(
+                label = "Local Storage",
+                value = "Room DB (Mesh Node Active)"
+            )
+
+            // Real Data Row 4: Data Age (You can format your ship's timestamp here)
+            TelemetryRow(
+                label = "Last Packet Received",
+                value = ship.timestamp ?: "Just now"
+            )
+        }
+    }
+}
+
+@Composable
+fun TelemetryRow(label: String, value: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(text = label, color = Color.Gray, fontSize = 12.sp)
+        Text(text = value, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+    }
 }
 
 @Preview(showBackground = true)

@@ -141,7 +141,6 @@ object ShipRepository {
     fun initialize(dao: VesselDao) {
         vesselDao = dao
         purgeOldTrackPoints()
-        seedDeepSeaVessels()
     }
 
     private fun purgeOldTrackPoints() {
@@ -149,94 +148,6 @@ object ShipRepository {
             val fortyEightHoursAgo = System.currentTimeMillis() - (48 * 60 * 60 * 1000L)
             vesselDao?.deleteOldPoints(fortyEightHoursAgo)
         }
-    }
-
-    private fun seedDeepSeaVessels() {
-        val sampleDeepSeaShips = listOf(
-            ShipState(
-                mmsi = 353136000L,
-                latitude = 44.50,
-                longitude = -32.80,
-                name = "EVER GIVEN",
-                shipType = 70,
-                length = 400,
-                width = 59,
-                heading = 78f,
-                cog = 78f,
-                speed = 18.5f,
-                destination = "ROTTERDAM",
-                imo = 9811000L,
-                callSign = "H3RC",
-                navStatus = 0
-            ),
-            ShipState(
-                mmsi = 219018271L,
-                latitude = 36.20,
-                longitude = -41.50,
-                name = "MAERSK MC-KINNEY MOLLER",
-                shipType = 70,
-                length = 399,
-                width = 59,
-                heading = 245f,
-                cog = 245f,
-                speed = 19.2f,
-                destination = "NEW YORK",
-                imo = 9632064L,
-                callSign = "OU21",
-                navStatus = 0
-            ),
-            ShipState(
-                mmsi = 235088210L,
-                latitude = -12.40,
-                longitude = 75.30,
-                name = "PIONEER SPIRIT",
-                shipType = 80,
-                length = 333,
-                width = 60,
-                heading = 112f,
-                cog = 112f,
-                speed = 14.8f,
-                destination = "SINGAPORE",
-                imo = 9741000L,
-                callSign = "M3XX",
-                navStatus = 0
-            ),
-            ShipState(
-                mmsi = 374211000L,
-                latitude = 32.10,
-                longitude = -155.40,
-                name = "PACIFIC GUARDIAN",
-                shipType = 70,
-                length = 292,
-                width = 45,
-                heading = 290f,
-                cog = 290f,
-                speed = 16.0f,
-                destination = "YOKOHAMA",
-                imo = 9522000L,
-                callSign = "3FGG",
-                navStatus = 0
-            ),
-            ShipState(
-                mmsi = 311000120L,
-                latitude = 64.80,
-                longitude = 2.10,
-                name = "NORDIC ORION",
-                shipType = 70,
-                length = 225,
-                width = 32,
-                heading = 25f,
-                cog = 25f,
-                speed = 13.5f,
-                destination = "NARVIK",
-                imo = 9529000L,
-                callSign = "C6XX",
-                navStatus = 0
-            )
-        )
-
-        val enrichedMap = sampleDeepSeaShips.map { enrichWithSatelliteTelemetry(it) }.associateBy { it.mmsi }
-        _ships.update { current -> enrichedMap + current }
     }
 
     fun updateShip(ship: ShipState) {
@@ -344,7 +255,6 @@ object ShipRepository {
 
     fun startTracking(apiKey: String? = null): Boolean {
         purgeOldTrackPoints()
-        seedDeepSeaVessels()
 
         val resolvedApiKey = resolveApiKey(apiKey)
         if (resolvedApiKey == null) {

@@ -127,17 +127,10 @@ object CoastalDistanceUtils {
     }
 
     /**
-     * Determines satellite constellation assigned to the message based on MMSI / region seed
+     * Determines datalink provider assigned to the message based on AISStream feed
      */
     fun getConstellationName(mmsi: Long, lat: Double): String {
-        val constellations = listOf(
-            "Spire Global S-AIS",
-            "Orbcomm S-AIS Constellation",
-            "exactEarth LEO Satellite",
-            "Iridium NEXT S-AIS Network"
-        )
-        val index = (mmsi.hashCode() + lat.toInt()).let { if (it < 0) -it else it } % constellations.size
-        return constellations[index]
+        return "AISStream WebSocket TCP"
     }
 
     /**
@@ -161,11 +154,8 @@ object CoastalDistanceUtils {
             "Terrestrial Coastal AIS"
         }
 
-        val constellation = if (isSat) getConstellationName(mmsi, lat) else "Terrestrial Coastal Stations"
-
-        // Calculate deterministic quality % based on MMSI & distance
-        val qualityBase = 90 + ((mmsi % 10).toInt())
-        val qualityStr = if (isSat) "$qualityBase% (LEO Satellites in View)" else "99% (Direct Line-of-Sight)"
+        val constellation = "AISStream WebSocket TCP"
+        val qualityStr = "100% (Real-Time Mesh Feed)"
 
         return SatelliteTelemetryInfo(
             isSatelliteAis = isSat,

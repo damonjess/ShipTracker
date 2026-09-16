@@ -73,16 +73,15 @@ object WeatherRepository {
                 return@withContext result
             }
         } catch (e: Exception) {
-            // Return fallback weather estimate if offline
-            return@withContext MarineWeather(
-                windSpeedKnots = 12f,
-                windDirectionDeg = 210f,
-                waveHeightMeters = 0.8f,
-                airTempCelsius = 14f,
-                conditionSummary = "Moderate Seas (12 kn)"
-            )
+            // Purged the fake MarineWeather(windSpeedKnots=12f...) object.
+            // Now it strictly returns null on failure.
+            return@withContext null
         }
 
         null
+    }
+
+    suspend fun fetchMarineWeather(lat: Double, lon: Double): MarineWeather? {
+        return getWeatherForLocation(lat, lon)
     }
 }
