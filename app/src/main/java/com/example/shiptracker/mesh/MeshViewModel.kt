@@ -5,6 +5,7 @@ import android.net.wifi.p2p.WifiP2pDevice
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.shiptracker.data.ShipState
 import com.example.shiptracker.data.VesselDao
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,6 +20,21 @@ class MeshViewModel(
     
     private val serializer = MeshSerializer()
     private val transmitter = MeshTransmitter()
+
+    private val _selectedTarget = MutableStateFlow<ShipState?>(null)
+    val selectedTarget: StateFlow<ShipState?> = _selectedTarget.asStateFlow()
+
+    private val _selectedMmsi = MutableStateFlow<String?>(null)
+    val selectedMmsi: StateFlow<String?> = _selectedMmsi.asStateFlow()
+
+    fun lockOnTarget(mmsi: String?) {
+        _selectedMmsi.value = mmsi
+    }
+
+    fun selectTarget(ship: ShipState?) {
+        _selectedTarget.value = ship
+        _selectedMmsi.value = ship?.mmsi?.toString()
+    }
 
     private val _discoveredPeers = MutableStateFlow<List<WifiP2pDevice>>(emptyList())
     val discoveredPeers: StateFlow<List<WifiP2pDevice>> = _discoveredPeers.asStateFlow()

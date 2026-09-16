@@ -297,6 +297,18 @@ class ShipViewModel(
         initialValue = null
     )
 
+    val selectedShip: StateFlow<ShipState?> = combine(
+        repository.ships,
+        selectedMmsi
+    ) { shipMap, mmsi ->
+        if (mmsi != null) shipMap[mmsi] else null
+    }.flowOn(Dispatchers.Default)
+    .stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = null
+    )
+
     // Automatically queries Room and converts points into Google Maps LatLng coordinates
     @OptIn(ExperimentalCoroutinesApi::class)
     val activeTrackPoints: StateFlow<List<LatLng>> = selectedMmsi
@@ -408,6 +420,18 @@ class ShipViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     fun selectVessel(mmsi: Long) {
+        selectedMmsi.value = mmsi
+    }
+
+    fun selectTarget(ship: ShipState?) {
+        selectedMmsi.value = ship?.mmsi
+    }
+
+    fun lockOnTarget(mmsi: String?) {
+        selectedMmsi.value = mmsi?.toLongOrNull()
+    }
+
+    fun lockOnTarget(mmsi: Long?) {
         selectedMmsi.value = mmsi
     }
 

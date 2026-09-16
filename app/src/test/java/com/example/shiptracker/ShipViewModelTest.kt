@@ -102,6 +102,20 @@ class ShipViewModelTest {
     }
 
     @Test
+    fun testSelectTargetUpdatesSelectedShipAndMmsi() = runTest {
+        testDispatcher.scheduler.advanceUntilIdle()
+        val testShip = sampleShips[0]
+
+        viewModel.selectTarget(testShip)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(testShip.mmsi, viewModel.selectedMmsi.value)
+        val selected = viewModel.selectedShip.first { it != null }
+        assertEquals(testShip.mmsi, selected?.mmsi)
+        assertEquals(testShip.name, selected?.name)
+    }
+
+    @Test
     fun testToggleFollowAndStopFollowing() = runTest {
         val testMmsi = 235009270L
 
@@ -313,6 +327,19 @@ class ShipViewModelTest {
             list.add(point)
             flowMap.getOrPut(point.mmsi) { MutableStateFlow(emptyList()) }.value = list.toList()
             updateTotalCount()
+        }
+
+        override suspend fun insertPoints(points: List<VesselTrackPoint>) {
+            points.forEach { point ->
+                val list = pointsMap.getOrPut(point.mmsi) { mutableListOf() }
+                list.add(point)
+                flowMap.getOrPut(point.mmsi) { MutableStateFlow(emptyList()) }.value = list.toList()
+            }
+            updateTotalCount()
+        }
+
+        override suspend fun getAllPoints(): List<VesselTrackPoint> {
+            return pointsMap.values.flatten()
         }
 
         override fun getTrackForVessel(mmsi: Long): Flow<List<VesselTrackPoint>> {

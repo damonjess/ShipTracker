@@ -1,5 +1,6 @@
 package com.example.shiptracker.ui
 
+import android.R
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
@@ -22,6 +23,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.DashPathEffect
 import android.graphics.Paint
+import android.graphics.Point
 import android.graphics.drawable.BitmapDrawable
 import android.net.Uri
 import android.os.Build
@@ -35,8 +37,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.ui.res.painterResource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -45,9 +50,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
+import kotlin.math.roundToInt
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -141,6 +151,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
+import org.osmdroid.events.MapEventsReceiver
 import org.osmdroid.events.MapListener
 import org.osmdroid.events.ScrollEvent
 import org.osmdroid.events.ZoomEvent
@@ -150,10 +161,16 @@ import org.osmdroid.util.GeoPoint
 import org.osmdroid.util.MapTileIndex
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.FolderOverlay
+import org.osmdroid.views.overlay.MapEventsOverlay
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polygon
 import org.osmdroid.views.overlay.Polyline
 import org.osmdroid.views.overlay.TilesOverlay
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import java.net.URLEncoder
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -483,17 +500,20 @@ fun OpenShipMap(
     recenterTrigger: Int = 0,
     mapType: AppMapType = AppMapType.LIGHT,
     followedShip: ShipState? = null,
+    selectedShip: ShipState? = null,
     earthquakes: List<Earthquake> = emptyList(),
     minQuakeMag: Double = 2.5,
     onMapTouched: () -> Unit = {},
     onPanConsumed: () -> Unit = {},
     onViewportChanged: (north: Double, south: Double, east: Double, west: Double, zoom: Double) -> Unit = { _, _, _, _, _ -> },
     onEarthquakeClick: (Earthquake) -> Unit = {},
+    onMapClick: () -> Unit = {},
     onShipClick: (ShipState) -> Unit
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val currentOnShipClick = rememberUpdatedState(onShipClick)
+    val currentOnMapClick = rememberUpdatedState(onMapClick)
     val currentOnViewportChanged = rememberUpdatedState(onViewportChanged)
 
     val activeTileSource = when (mapType) {
@@ -501,6 +521,19 @@ fun OpenShipMap(
         AppMapType.DARK -> EsriDarkGrayCanvasTileSource
         AppMapType.SATELLITE -> EsriWorldImageryTileSource
         AppMapType.NAUTICAL -> EsriOceanBasemapTileSource
+    }
+
+    val mapEventsOverlay = remember {
+        MapEventsOverlay(object : MapEventsReceiver {
+            override fun singleTapConfirmedHelper(p: GeoPoint?): Boolean {
+                currentOnMapClick.value()
+                return false
+            }
+
+            override fun longPressHelper(p: GeoPoint?): Boolean {
+                return false
+            }
+        })
     }
 
     val seamarkOverlay = remember {
@@ -518,6 +551,8 @@ fun OpenShipMap(
             setMultiTouchControls(true)
             controller.setZoom(10.0)
             controller.setCenter(GeoPoint(53.6, -0.1))
+
+            overlays.add(0, mapEventsOverlay)
 
             // 🚨 NEW: Break the follow lock the moment the user's finger touches the map
             setOnTouchListener { v, event ->
@@ -650,10 +685,46 @@ fun OpenShipMap(
         }
     }
 
-    AndroidView(
-        modifier = modifier.fillMaxSize(),
-        factory = { mapView }
-    )
+    Box(modifier = modifier.fillMaxSize()) {
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
+            factory = { mapView }
+        )
+
+        var reticleOffset by remember { mutableStateOf<Offset?>(null) }
+        val density = LocalDensity.current
+
+        LaunchedEffect(selectedShip, selectedShip?.latitude, selectedShip?.longitude) {
+            val target = selectedShip
+            if (target != null) {
+                while (isActive) {
+                    val proj = mapView.projection
+                    if (proj != null) {
+                        val point = Point()
+                        proj.toPixels(GeoPoint(target.latitude, target.longitude), point)
+                        reticleOffset = Offset(point.x.toFloat(), point.y.toFloat())
+                    }
+                    delay(16)
+                }
+            } else {
+                reticleOffset = null
+            }
+        }
+
+        if (selectedShip != null && reticleOffset != null) {
+            val offset = reticleOffset!!
+            val reticleSizePx = with(density) { 48.dp.toPx() }
+            LockOnReticle(
+                modifier = Modifier
+                    .offset {
+                        IntOffset(
+                            (offset.x - reticleSizePx / 2f).roundToInt(),
+                            (offset.y - reticleSizePx / 2f).roundToInt()
+                        )
+                    }
+            )
+        }
+    }
 
     val isDark = mapType == AppMapType.DARK || mapType == AppMapType.NAUTICAL || isSystemInDarkTheme()
     val trackColorHex = if (isDark) "#00E5FF" else "#0077FF"
@@ -866,6 +937,7 @@ fun ShipTrackerMainScreen(
     val categoryCounts by viewModel.categoryCounts.collectAsState()
     val trackPoints by viewModel.activeTrackPoints.collectAsState()
     val activeMmsi by viewModel.selectedMmsi.collectAsState()
+    val selectedShipState by viewModel.selectedShip.collectAsState()
     val followedMmsi by viewModel.followedMmsi.collectAsState()
     val followedShip by viewModel.followedShip.collectAsState()
     val departedLocation by viewModel.departedLocation.collectAsState()
@@ -918,7 +990,7 @@ fun ShipTrackerMainScreen(
     } else {
         Scaffold(
             bottomBar = {
-                AppBottomBar(
+                ScrollableBottomNav(
                     selectedIndex = selectedNavIndex,
                     onItemSelected = { index ->
                         selectedNavIndex = index
@@ -935,6 +1007,14 @@ fun ShipTrackerMainScreen(
                     .padding(paddingValues)
             ) {
                 when (selectedNavIndex) {
+                    4 -> {
+                        // TAB 5: Radar
+                        ActiveRadarScreen(
+                            ships = allShips,
+                            myLat = 53.58,
+                            myLon = -0.65
+                        )
+                    }
                     2 -> {
                         // TAB 3: Health
                         SystemHealthScreen(
@@ -943,15 +1023,16 @@ fun ShipTrackerMainScreen(
                             onLaunchSilentMesh = { showSilentMesh = true }
                         )
                     }
-                1 -> {
-                    // TAB 2: My Fleets
-                    MyFleetsScreen(
-                        viewModel = viewModel,
-                        onNavigateToMap = { selectedNavIndex = 0 }
-                    )
-                }
+                    1 -> {
+                        // TAB 2: My Fleets
+                        MyFleetsScreen(
+                            viewModel = viewModel,
+                            onNavigateToMap = { selectedNavIndex = 0 }
+                        )
+                    }
                 0, 3 -> {
                     // TAB 1 (Map) and TAB 4 (Seismic) BOTH render the Map in the background!
+                    // 1. BASE LAYER: The Map
                     OpenShipMap(
                         ships = visibleShips,
                         trackPoints = trackPoints,
@@ -959,6 +1040,7 @@ fun ShipTrackerMainScreen(
                         recenterTrigger = recenterTrigger,
                         mapType = currentMapType,
                         followedShip = followedShip,
+                        selectedShip = selectedShipState,
                         earthquakes = earthquakes,
                         minQuakeMag = minQuakeMag,
                         onMapTouched = { viewModel.stopFollowing() },
@@ -970,12 +1052,169 @@ fun ShipTrackerMainScreen(
                         onEarthquakeClick = { quake ->
                             viewModel.selectEarthquake(quake)
                         },
+                        onMapClick = {
+                            // DISMISS ACTION: Tapping the ocean clears target lock
+                            viewModel.lockOnTarget(null as Long?)
+                        },
                         onShipClick = { ship ->
-                            selectedVessel = ship.toVessel()
-                            viewModel.selectVessel(ship.mmsi)
+                            // LOCK-ON ACTION: Tapping a vessel engages target lock
+                            viewModel.lockOnTarget(ship.mmsi)
                         }
                     )
 
+                    // 2. CIVILIAN UI LAYER (Hidden during target lock-on)
+                    AnimatedVisibility(
+                        visible = activeMmsi == null,
+                        enter = fadeIn(),
+                        exit = fadeOut(),
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            // Top UI (Search Bar, Filters, SAIS Banner / Seismic Filters)
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.TopCenter)
+                                    .padding(16.dp)
+                            ) {
+                                if (selectedNavIndex == 3) {
+                                    Column {
+                                        TacticalSeismicFilter(
+                                            currentFilter = minQuakeMag,
+                                            onFilterSelected = { viewModel.setMinQuakeMagnitude(it) }
+                                        )
+
+                                        if (tsunamiThreat != null) {
+                                            Spacer(modifier = Modifier.height(8.dp))
+                                            TsunamiWarningBanner(
+                                                threat = tsunamiThreat!!
+                                            )
+                                        }
+                                    }
+                                } else {
+                                    MapHeader(
+                                        activeFilters = activeFilters,
+                                        onFilterToggle = { viewModel.toggleFilter(it) },
+                                        ships = unclusteredShips,
+                                        totalActiveShipsCount = totalActiveShipsCount,
+                                        allShips = allShips,
+                                        categoryCounts = categoryCounts,
+                                        isFavoritesOnly = isFavoritesOnly,
+                                        onFavoritesOnlyToggle = { viewModel.toggleFavoritesOnly() },
+                                        favoriteCount = favoriteMmsis.size,
+                                        weather = weather,
+                                        showNauticalInfoBanner = (currentMapType == AppMapType.NAUTICAL && showNauticalInfoBanner),
+                                        onNauticalInfoClick = { showNauticalDetailsSheet = true },
+                                        onNauticalDismiss = { showNauticalInfoBanner = false },
+                                        isSatelliteMode = isSatelliteMode,
+                                        satelliteCount = satelliteCount,
+                                        deepSeaCount = deepSeaCount,
+                                        onSatelliteClick = { showSatelliteAisSheet = true },
+                                        onShipSearchSelected = { ship ->
+                                            panTarget = ship
+                                        }
+                                    )
+                                }
+                            }
+
+                            // Map Type Selector FAB
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(top = if (selectedNavIndex == 3 && tsunamiThreat != null) 210.dp else 270.dp, end = 16.dp)
+                            ) {
+                                Box {
+                                    FloatingActionButton(
+                                        onClick = { showMapTypeMenu = true },
+                                        modifier = Modifier.size(48.dp),
+                                        containerColor = MaterialTheme.colorScheme.surface,
+                                        contentColor = MaterialTheme.colorScheme.onSurface
+                                    ) {
+                                        Icon(imageVector = Icons.Default.Public, contentDescription = "Change Map Type")
+                                    }
+
+                                    DropdownMenu(
+                                        expanded = showMapTypeMenu,
+                                        onDismissRequest = { showMapTypeMenu = false }
+                                    ) {
+                                        AppMapType.entries.forEach { type ->
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Row(
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                                    ) {
+                                                        if (type == AppMapType.NAUTICAL) {
+                                                            Icon(
+                                                                imageVector = Icons.Default.DirectionsBoat,
+                                                                contentDescription = null,
+                                                                tint = MaterialTheme.colorScheme.primary,
+                                                                modifier = Modifier.size(18.dp)
+                                                            )
+                                                        }
+                                                        Text(type.displayName)
+                                                    }
+                                                },
+                                                onClick = {
+                                                    currentMapType = type
+                                                    if (type == AppMapType.NAUTICAL) {
+                                                        showNauticalInfoBanner = true
+                                                        showNauticalDetailsSheet = true
+                                                    }
+                                                    showMapTypeMenu = false
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Recenter FAB
+                            FloatingActionButton(
+                                onClick = { recenterTrigger++ },
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .padding(end = 16.dp, bottom = 40.dp),
+                                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CenterFocusStrong,
+                                    contentDescription = "Recenter Fleet Map"
+                                )
+                            }
+                        }
+                    }
+
+                    // 3. TACTICAL HUD LAYER (Visible during target lock-on)
+                    TacticalTelemetryPanel(
+                        targetMmsi = activeMmsi?.toString() ?: selectedShipState?.mmsi?.toString(),
+                        vesselName = selectedShipState?.name,
+                        vesselType = selectedShipState?.let { VesselTypeDecoder.getGeneralVesselType(it.shipType).uppercase(Locale.US) },
+                        speed = selectedShipState?.speed?.toDouble() ?: 0.0,
+                        heading = selectedShipState?.heading?.toDouble() ?: 0.0,
+                        isFleetMember = (activeMmsi ?: selectedShipState?.mmsi)?.let { favoriteMmsis.contains(it) } == true,
+                        isVisible = activeMmsi != null || selectedShipState != null,
+                        modifier = Modifier.align(Alignment.CenterEnd),
+                        onToggleFleet = { mmsiStr ->
+                            mmsiStr.toLongOrNull()?.let { mmsiLong ->
+                                viewModel.toggleFavorite(mmsiLong)
+                            }
+                        },
+                        onOpenIntel = { mmsiStr ->
+                            mmsiStr.toLongOrNull()?.let { mmsiLong ->
+                                val targetShip = selectedShipState?.takeIf { it.mmsi == mmsiLong }
+                                    ?: allShips.find { it.mmsi == mmsiLong }
+                                if (targetShip != null) {
+                                    selectedVessel = targetShip.toVessel()
+                                }
+                                viewModel.selectVessel(mmsiLong)
+                            }
+                            viewModel.lockOnTarget(null as Long?)
+                        },
+                        onDismiss = { viewModel.lockOnTarget(null as Long?) }
+                    )
+
+                    // Map Attribution Text
                     Text(
                         text = if (currentMapType == AppMapType.NAUTICAL)
                             "© Esri, OpenStreetMap & OpenSeaMap contributors"
@@ -992,127 +1231,6 @@ fun ShipTrackerMainScreen(
                             )
                             .padding(horizontal = 6.dp, vertical = 3.dp)
                     )
-
-                    FloatingActionButton(
-                        onClick = { recenterTrigger++ },
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .padding(end = 16.dp, bottom = 40.dp),
-                        containerColor = MaterialTheme.colorScheme.primaryContainer,
-                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.CenterFocusStrong,
-                            contentDescription = "Recenter Fleet Map"
-                        )
-                    }
-
-                    if (selectedNavIndex == 3) {
-                        TacticalSeismicFilter(
-                            currentFilter = minQuakeMag,
-                            onFilterSelected = { viewModel.setMinQuakeMagnitude(it) },
-                            modifier = Modifier
-                                .align(Alignment.TopCenter)
-                                .padding(16.dp)
-                        )
-
-                        if (tsunamiThreat != null) {
-                            TsunamiWarningBanner(
-                                threat = tsunamiThreat!!,
-                                modifier = Modifier
-                                    .align(Alignment.TopCenter)
-                                    .padding(top = 96.dp, start = 16.dp, end = 16.dp)
-                            )
-                        }
-                    } else {
-                        MapHeader(
-                            activeFilters = activeFilters,
-                            onFilterToggle = { viewModel.toggleFilter(it) },
-                            ships = unclusteredShips,
-                            totalActiveShipsCount = totalActiveShipsCount,
-                            allShips = allShips,
-                            categoryCounts = categoryCounts,
-                            isFavoritesOnly = isFavoritesOnly,
-                            onFavoritesOnlyToggle = { viewModel.toggleFavoritesOnly() },
-                            favoriteCount = favoriteMmsis.size,
-                            weather = weather,
-                            showNauticalInfoBanner = (currentMapType == AppMapType.NAUTICAL && showNauticalInfoBanner),
-                            onNauticalInfoClick = { showNauticalDetailsSheet = true },
-                            onNauticalDismiss = { showNauticalInfoBanner = false },
-                            isSatelliteMode = isSatelliteMode,
-                            satelliteCount = satelliteCount,
-                            deepSeaCount = deepSeaCount,
-                            onSatelliteClick = { showSatelliteAisSheet = true },
-                            onShipSearchSelected = { ship ->
-                                panTarget = ship
-                            },
-                            modifier = Modifier
-                                .align(Alignment.TopCenter)
-                                .padding(16.dp)
-                        )
-                    }
-
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(top = if (selectedNavIndex == 3 && tsunamiThreat != null) 210.dp else 270.dp, end = 16.dp)
-                    ) {
-                        FloatingActionButton(
-                            onClick = { showMapTypeMenu = true },
-                            modifier = Modifier.size(48.dp),
-                            containerColor = MaterialTheme.colorScheme.surface,
-                            contentColor = MaterialTheme.colorScheme.onSurface
-                        ) {
-                            Icon(imageVector = Icons.Default.Public, contentDescription = "Change Map Type")
-                        }
-
-                        DropdownMenu(
-                            expanded = showMapTypeMenu,
-                            onDismissRequest = { showMapTypeMenu = false }
-                        ) {
-                            AppMapType.entries.forEach { type ->
-                                DropdownMenuItem(
-                                    text = {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                        ) {
-                                            if (type == AppMapType.NAUTICAL) {
-                                                Icon(
-                                                    imageVector = Icons.Default.DirectionsBoat,
-                                                    contentDescription = null,
-                                                    tint = MaterialTheme.colorScheme.primary,
-                                                    modifier = Modifier.size(18.dp)
-                                                )
-                                            }
-                                            Text(type.displayName)
-                                        }
-                                    },
-                                    onClick = {
-                                        currentMapType = type
-                                        if (type == AppMapType.NAUTICAL) {
-                                            showNauticalInfoBanner = true
-                                            showNauticalDetailsSheet = true
-                                        }
-                                        showMapTypeMenu = false
-                                    }
-                                )
-                            }
-                        }
-                    }
-
-                    if (activeMmsi != null && selectedVessel == null) {
-                        ExtendedFloatingActionButton(
-                            onClick = { viewModel.clearSelection() },
-                            icon = { Icon(Icons.Default.Close, contentDescription = "Stop Tracking") },
-                            text = { Text("Stop Tracking") },
-                            containerColor = Color(0xFF3483C4),
-                            contentColor = Color.White,
-                            modifier = Modifier
-                                .align(Alignment.TopCenter)
-                                .padding(top = if (selectedNavIndex == 3 && tsunamiThreat != null) 210.dp else 270.dp)
-                        )
-                    }
                 }
             }
         }
@@ -1131,7 +1249,7 @@ fun ShipTrackerMainScreen(
         )
     }
 
-    if (selectedVessel != null) {
+    if (selectedVessel != null && activeMmsi == null) {
         val liveShip = visibleShips.find { it.mmsi == selectedVessel!!.mmsi } ?: if (followedShip?.mmsi == selectedVessel!!.mmsi) followedShip else null
         val displayVessel = liveShip?.toVessel() ?: selectedVessel!!
         val isFollowing = followedMmsi == displayVessel.mmsi
@@ -2182,50 +2300,82 @@ fun WeatherCell(
 }
 
 @Composable
+fun ScrollableBottomNav(currentRoute: String, onNavigate: (String) -> Unit) {
+    // Define your tabs here
+    val tabs: List<Pair<String, Int>> = listOf(
+        Pair("Map", R.drawable.ic_dialog_map),
+        Pair("My Fleets", R.drawable.ic_menu_myplaces),
+        Pair("Health", R.drawable.ic_menu_manage),
+        Pair("Seismic", R.drawable.ic_dialog_alert),
+        Pair("Radar", R.drawable.ic_menu_compass) // THE NEW TAB
+    )
+
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 8.dp, // Gives it that bottom bar shadow
+        modifier = Modifier.navigationBarsPadding()
+    ) {
+        LazyRow(
+            modifier = Modifier.fillMaxWidth(),
+            contentPadding = PaddingValues(horizontal = 8.dp)
+        ) {
+            items(tabs) { tab ->
+                val (label, iconRes) = tab
+                val isSelected = currentRoute == label
+
+                Row(modifier = Modifier.width(80.dp)) {
+                    NavigationBarItem(
+                        selected = isSelected,
+                        onClick = { onNavigate(label) },
+                        icon = { 
+                            Icon(
+                                painter = painterResource(id = iconRes),
+                                contentDescription = label
+                            ) 
+                        },
+                        label = { Text(label, maxLines = 1) },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ScrollableBottomNav(
+    selectedIndex: Int = 0,
+    onItemSelected: (Int) -> Unit = {}
+) {
+    val tabs: List<Pair<String, Int>> = listOf(
+        Pair("Map", R.drawable.ic_dialog_map),
+        Pair("My Fleets", R.drawable.ic_menu_myplaces),
+        Pair("Health", R.drawable.ic_menu_manage),
+        Pair("Seismic", R.drawable.ic_dialog_alert),
+        Pair("Radar", R.drawable.ic_menu_compass)
+    )
+
+    val currentRoute = tabs.getOrNull(selectedIndex)?.first ?: "Map"
+    ScrollableBottomNav(
+        currentRoute = currentRoute,
+        onNavigate = { label ->
+            val index = tabs.indexOfFirst { it.first == label }
+            if (index >= 0) {
+                onItemSelected(index)
+            }
+        }
+    )
+}
+
+@Composable
 fun AppBottomBar(
     selectedIndex: Int = 0,
     onItemSelected: (Int) -> Unit = {}
 ) {
-    NavigationBar(
-        containerColor = Color(0xFF1E293B)
-    ) {
-        // 1. MAP TAB
-        NavigationBarItem(
-            selected = selectedIndex == 0,
-            onClick = { onItemSelected(0) },
-            icon = { Icon(Icons.Default.Public, contentDescription = "Map") },
-            label = { Text("Map") }
-        )
-        
-        // 2. MY FLEETS TAB
-        NavigationBarItem(
-            selected = selectedIndex == 1,
-            onClick = { onItemSelected(1) },
-            icon = { Icon(Icons.Default.Folder, contentDescription = "My Fleets") },
-            label = { Text("My Fleets") }
-        )
-        
-        // 3. HEALTH TAB
-        NavigationBarItem(
-            selected = selectedIndex == 2,
-            onClick = { onItemSelected(2) },
-            icon = { Icon(Icons.Default.Memory, contentDescription = "Health") },
-            label = { Text("Health") }
-        )
-        
-        // 4. 🚨 SEISMIC TAB 🚨
-        NavigationBarItem(
-            selected = selectedIndex == 3,
-            onClick = { onItemSelected(3) },
-            icon = {
-                Icon(
-                    imageVector = Icons.Default.Warning, 
-                    contentDescription = "Seismic Hazards"
-                )
-            },
-            label = { Text("Seismic") }
-        )
-    }
+    ScrollableBottomNav(
+        selectedIndex = selectedIndex,
+        onItemSelected = onItemSelected
+    )
 }
 
 @Preview(showBackground = true)
