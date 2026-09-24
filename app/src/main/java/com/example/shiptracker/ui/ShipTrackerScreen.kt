@@ -36,6 +36,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -129,6 +130,8 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -217,6 +220,18 @@ data class Vessel(
 
 val Vessel.destination: String get() = reportedDestination
 val Vessel.eta: String get() = reportedEta
+
+/** True when the vessel is an RNLI lifeboat / search-and-rescue craft (by name or AIS type 51). */
+fun Vessel.isSearchAndRescue(): Boolean {
+    val upperName = name.uppercase(Locale.US)
+    return upperName.contains("RNLI") ||
+            upperName.contains("LIFEBOAT") ||
+            upperName.contains("RESCUE") ||
+            upperName.contains("SAR ") ||
+            upperName.contains("COASTGUARD") ||
+            generalType.equals("Search and Rescue", ignoreCase = true) ||
+            detailedType.contains("Search and Rescue", ignoreCase = true)
+}
 
 fun getShipTypeString(aisTypeCode: Int): String {
     return VesselTypeDecoder.decodeType(aisTypeCode)
@@ -405,11 +420,12 @@ fun formatVesselLocalTime(lng: Double): String {
 
 fun formatRelativeTime(lastSeenMillis: Long): String {
     val diff = System.currentTimeMillis() - lastSeenMillis
-    if (diff < 60_000L) return "9 mins ago"
+    if (diff < 60_000L) return "just now"
     val mins = diff / 60_000L
     if (mins < 60) return "$mins mins ago"
     val hours = mins / 60
-    if (hours < 24) return "$hours ${if (hours == 1L) "hour" else "hours"} ago"
+    val remMins = mins % 60
+    if (hours < 24) return if (remMins > 0) "$hours h, $remMins mins ago" else "$hours ${if (hours == 1L) "hour" else "hours"} ago"
     val days = hours / 24
     return "$days ${if (days == 1L) "day" else "days"} ago"
 }
@@ -947,6 +963,15 @@ fun ShipTrackerMainScreen(
     val rawTrackPoints by viewModel.rawSelectedTrackPoints.collectAsState()
     val cpaRisk by viewModel.cpaRisk.collectAsState()
     val weather by viewModel.currentMarineWeather.collectAsState()
+
+    // 🚨 NEW: Live on-site weather for the selected vessel (used by the Lifeboat card)
+    var vesselWeather by remember { mutableStateOf<VesselWeatherInfo?>(null) }
+    LaunchedEffect(activeMmsi, selectedShipState?.latitude, selectedShipState?.longitude) {
+        vesselWeather = null
+        selectedShipState?.let { ship ->
+            vesselWeather = fetchVesselWeather(ship.latitude, ship.longitude)
+        }
+    }
     val earthquakes by viewModel.earthquakes.collectAsState()
     val tsunamiThreat by viewModel.activeTsunamiThreat.collectAsState()
     val minQuakeMag by viewModel.minQuakeMag.collectAsState()
@@ -1265,25 +1290,44 @@ fun ShipTrackerMainScreen(
             containerColor = Color(0xFFF8FAFC),
             shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
         ) {
-            VesselDetailsPanel(
-                vessel = displayVessel,
-                isFollowing = isFollowing,
-                isFavorite = isFavorite,
-                onFavoriteToggle = { viewModel.toggleFavorite(displayVessel.mmsi) },
-                departedLocation = departedLocation,
-                calculatedEta = calculatedEta,
-                cpaRisk = cpaRisk,
-                rawTrackPoints = rawTrackPoints,
-                visibleShips = visibleShips,
-                weather = weather,
-                onClose = {
-                    selectedVessel = null
-                    viewModel.clearSelection()
-                },
-                onTrackClick = {
-                    viewModel.toggleFollow(displayVessel.mmsi)
-                }
-            )
+            if (displayVessel.isSearchAndRescue()) {
+                LifeboatDetailsPanel(
+                    vessel = displayVessel,
+                    isFavorite = isFavorite,
+                    onFavoriteToggle = { viewModel.toggleFavorite(displayVessel.mmsi) },
+                    voyage = VoyageEndpoints(
+                        departureName = departedLocation,
+                        departureTime = rawTrackPoints.firstOrNull()?.timestamp,
+                        arrivalTime = rawTrackPoints.lastOrNull()?.timestamp
+                    ),
+                    weather = vesselWeather,
+                    departedLocation = departedLocation,
+                    onClose = {
+                        selectedVessel = null
+                        viewModel.clearSelection()
+                    }
+                )
+            } else {
+                VesselDetailsPanel(
+                    vessel = displayVessel,
+                    isFollowing = isFollowing,
+                    isFavorite = isFavorite,
+                    onFavoriteToggle = { viewModel.toggleFavorite(displayVessel.mmsi) },
+                    departedLocation = departedLocation,
+                    calculatedEta = calculatedEta,
+                    cpaRisk = cpaRisk,
+                    rawTrackPoints = rawTrackPoints,
+                    visibleShips = visibleShips,
+                    weather = weather,
+                    onClose = {
+                        selectedVessel = null
+                        viewModel.clearSelection()
+                    },
+                    onTrackClick = {
+                        viewModel.toggleFollow(displayVessel.mmsi)
+                    }
+                )
+            }
         }
     }
 
@@ -1490,6 +1534,440 @@ fun MapHeader(
             onClick = onSatelliteClick
         )
     }
+}
+
+/**
+ * Voyage endpoints derived from the vessel's stored GPS track.
+ */
+data class VoyageEndpoints(
+    val departureName: String? = null,
+    val departureTime: Long? = null,
+    val arrivalTime: Long? = null
+)
+
+/**
+ * Dedicated RNLI / Search-and-Rescue vessel card, styled after the classic
+ * maritime tracking layout: flag+name header, large photo, Speed/Course/Received
+ * strip, a departure → arrival voyage timeline and compact spec rows.
+ */
+@Composable
+fun LifeboatDetailsPanel(
+    vessel: Vessel,
+    isFavorite: Boolean = false,
+    onFavoriteToggle: () -> Unit = {},
+    voyage: VoyageEndpoints? = null,
+    weather: VesselWeatherInfo? = null,
+    departedLocation: String? = null,
+    mmsi: Long = vessel.mmsi,
+    onClose: () -> Unit = {}
+) {
+    val context = LocalContext.current
+    val scrollState = rememberScrollState()
+    val rnliRed = Color(0xFF003C71)          // RNLI navy
+    val speedBlue = Color(0xFF0099CC)
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color(0xFFF8FAFC))
+            .verticalScroll(scrollState)
+            .navigationBarsPadding()
+    ) {
+        // ── HEADER: flag + name + close ─────────────────────────────
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(rnliRed)
+                .padding(horizontal = 12.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(text = vessel.flagEmoji, fontSize = 24.sp, modifier = Modifier.padding(end = 8.dp))
+            Text(
+                text = vessel.name.uppercase(Locale.US),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            IconButton(onClick = onFavoriteToggle, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+                    contentDescription = "Favorite",
+                    tint = if (isFavorite) Color(0xFFFFD700) else Color.White
+                )
+            }
+            IconButton(onClick = onClose, modifier = Modifier.size(32.dp)) {
+                Icon(imageVector = Icons.Default.Close, contentDescription = "Close", tint = Color.White)
+            }
+        }
+
+        // ── PHOTO ──────────────────────────────────────────────
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(230.dp)
+                .background(Color(0xFF1E293B)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.DirectionsBoat,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.15f),
+                modifier = Modifier.size(90.dp)
+            )
+
+            var userPhotos by remember(vessel.mmsi) {
+                mutableStateOf(VesselPhotoStore.getPhotosForVessel(context, vessel.mmsi))
+            }
+            val photoPickerLauncher = rememberLauncherForActivityResult(
+                contract = ActivityResultContracts.GetContent()
+            ) { uri: Uri? ->
+                if (uri != null) {
+                    VesselPhotoStore.addPhotoForVessel(context, vessel.mmsi, uri.toString())
+                    userPhotos = VesselPhotoStore.getPhotosForVessel(context, vessel.mmsi)
+                }
+            }
+
+            val imoNum = vessel.imo.toLongOrNull() ?: 0L
+            var photoUrl by remember(vessel.mmsi, vessel.imo, vessel.name) { mutableStateOf<String?>(null) }
+
+            LaunchedEffect(vessel.mmsi, vessel.imo, vessel.name) {
+                photoUrl = fetchVesselPhoto(
+                    searchTerm = if (imoNum > 0L) "IMO ${vessel.imo}" else vessel.name,
+                    imo = vessel.imo,
+                    shipName = vessel.name
+                )
+            }
+
+            val imageRequest = remember(vessel.mmsi, vessel.imo, vessel.name, photoUrl) {
+                if (photoUrl != null) {
+                    ImageRequest.Builder(context)
+                        .data(photoUrl)
+                        .addHeader("User-Agent", "ShipTrackerApp/1.0 (Android; VesselTracker)")
+                        .crossfade(true)
+                        .build()
+                } else {
+                    null
+                }
+            }
+
+            AsyncImage(
+                model = if (userPhotos.isNotEmpty()) userPhotos.first() else imageRequest,
+                contentDescription = "Photo of ${vessel.name}",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+
+            // Photo attribution + upload chip (bottom overlay)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.BottomCenter)
+                    .padding(8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(4.dp),
+                    color = Color.White.copy(alpha = 0.92f),
+                    shadowElevation = 2.dp,
+                    modifier = Modifier.clickable { photoPickerLauncher.launch("image/*") }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.AddAPhoto,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp),
+                            tint = Color(0xFF0F172A)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = if (userPhotos.isNotEmpty()) "Uploaded (${userPhotos.size})" else "Upload photo",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF0F172A)
+                        )
+                    }
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(4.dp),
+                    color = Color.Black.copy(alpha = 0.65f)
+                ) {
+                    Text(
+                        text = if (userPhotos.isNotEmpty()) "User Photo (${userPhotos.size})" else if (photoUrl != null) "© Wikimedia / Open License" else "© Maritime Community",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
+                        fontSize = 10.sp
+                    )
+                }
+            }
+        }
+
+        // ── SPEED / COURSE / RECEIVED STRIP ────────────────────
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
+                Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("Speed", style = MaterialTheme.typography.bodySmall, color = Color(0xFF64748B))
+                    Text(
+                        text = "${vessel.speedKnots.toInt()} Knots",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = speedBlue
+                    )
+                }
+                Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("Course", style = MaterialTheme.typography.bodySmall, color = Color(0xFF64748B)
+                    )
+                    Text(
+                        text = if (vessel.courseDeg > 0f) "${vessel.courseDeg.toInt()}°" else "---",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = speedBlue
+                    )
+                }
+                Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("Received", style = MaterialTheme.typography.bodySmall, color = Color(0xFF64748B))
+                    Text(
+                        text = vessel.positionReceivedAgo,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = speedBlue
+                    )
+                }
+            }
+        }
+
+        // ── VOYAGE TIMELINE: DEPARTURE ──→ ── ARRIVAL ──────────
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            Column(modifier = Modifier.padding(14.dp)) {
+                val depName = voyage?.departureName ?: departedLocation
+
+                // Port names row
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = (depName ?: "Unknown").uppercase(Locale.US),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF235DB2),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center
+                        )
+                        Text(
+                            text = "${vessel.flagEmoji} ${vessel.callSign}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color(0xFF334155)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(56.dp))
+                    Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = (vessel.matchedDestination.ifBlank { vessel.reportedDestination }
+                                .ifBlank { "Unknown" }).uppercase(Locale.US),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF235DB2),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center
+                        )
+                        Text(
+                            text = "${vessel.flagEmoji} ${vessel.callSign}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color(0xFF334155)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // Connector line with dots, flags + callsign, ATD/ATA labels and times
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TimelineEndpoint(
+                        timeMillis = voyage?.departureTime,
+                        label = "ATD",
+                        filled = false,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(2.dp)
+                            .background(Color(0xFF235DB2))
+                    )
+                    TimelineEndpoint(
+                        timeMillis = voyage?.arrivalTime,
+                        label = "ATA",
+                        filled = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        // ── SPEC ROWS (Type/Draught, Status, Size, Weather) ────
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Column(modifier = Modifier.padding(4.dp)) {
+                SpecRow(
+                    leftLabel = "Type",
+                    leftValue = vessel.detailedType,
+                    rightLabel = "Draught",
+                    rightValue = if (vessel.draughtMeters > 0f) "${"%.1f".format(vessel.draughtMeters)} m" else "-"
+                )
+                SpecDivider()
+                SpecRow(
+                    leftLabel = "Status",
+                    leftValue = vessel.navStatusText,
+                    rightLabel = "MMSI",
+                    rightValue = vessel.mmsi.toString()
+                )
+                SpecDivider()
+                SpecRow(
+                    leftLabel = "Size",
+                    leftValue = "${vessel.lengthMeters} x ${vessel.widthMeters.toInt()} m",
+                    rightLabel = "Clouds",
+                    rightValue = weather?.cloudCoverPercent?.let { "$it %" } ?: "-"
+                )
+                SpecDivider()
+                SpecRow(
+                    leftLabel = "Temp",
+                    leftValue = weather?.let { "${it.tempC}°C / ${it.tempF}°F" } ?: "-",
+                    rightLabel = "Wind",
+                    rightValue = weather?.let {
+                        val knots = (it.windSpeedMs * 1.94384).roundToInt()
+                        "${it.windCompass} / $knots knots".trim()
+                    } ?: "-"
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+    }
+}
+
+@Composable
+private fun TimelineEndpoint(
+    timeMillis: Long?,
+    label: String,
+    filled: Boolean,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier
+                .size(18.dp)
+                .background(
+                    color = if (filled) Color(0xFFFFC107) else Color.White,
+                    shape = CircleShape
+                )
+                .border(3.dp, Color(0xFF235DB2), CircleShape)
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = Color(0xFF64748B)
+        )
+        Text(
+            text = timeMillis?.let {
+                SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date(it))
+            } ?: "---",
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
+            color = Color(0xFF0F172A)
+        )
+    }
+}
+
+@Composable
+private fun SpecRow(
+    leftLabel: String,
+    leftValue: String,
+    rightLabel: String,
+    rightValue: String
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "$leftLabel ",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFF64748B)
+            )
+            Text(
+                text = leftValue,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFF0F172A),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Column(
+            modifier = Modifier.weight(1f),
+            horizontalAlignment = Alignment.End
+        ) {
+            Text(
+                text = "$rightLabel ",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFF64748B)
+            )
+            Text(
+                text = rightValue,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFF0F172A),
+                maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun SpecDivider() {
+    HorizontalDivider(color = Color(0xFFF1F5F9), modifier = Modifier.padding(horizontal = 12.dp))
 }
 
 @Composable
@@ -2427,7 +2905,8 @@ data class VesselWeatherInfo(
     val highC: Int,
     val highF: Int,
     val lowC: Int,
-    val lowF: Int
+    val lowF: Int,
+    val cloudCoverPercent: Int? = null
 )
 
 private fun celsiusToFahrenheit(c: Double): Int = (c * 9 / 5 + 32).toInt()
@@ -2466,7 +2945,7 @@ suspend fun fetchVesselWeather(lat: Double, lng: Double): VesselWeatherInfo? = w
     if (lat == 0.0 && lng == 0.0) return@withContext null
     val client = OkHttpClient()
     val url = "https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lng" +
-        "&current=temperature_2m,wind_speed_10m,wind_direction_10m,weather_code" +
+        "&current=temperature_2m,wind_speed_10m,wind_direction_10m,weather_code,cloud_cover" +
         "&daily=temperature_2m_max,temperature_2m_min" +
         "&wind_speed_unit=ms&timezone=UTC"
 
@@ -2501,7 +2980,8 @@ suspend fun fetchVesselWeather(lat: Double, lng: Double): VesselWeatherInfo? = w
                 highC = highCRaw.toInt(),
                 highF = celsiusToFahrenheit(highCRaw),
                 lowC = lowCRaw.toInt(),
-                lowF = celsiusToFahrenheit(lowCRaw)
+                lowF = celsiusToFahrenheit(lowCRaw),
+                cloudCoverPercent = current.optInt("cloud_cover", -1).takeIf { it >= 0 }
             )
         }
     } catch (e: Exception) {
